@@ -1,0 +1,6 @@
+build/
+.certs/
+*.o
+*.a
+node_modules/
+.DS_Store

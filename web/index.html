@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>webslam — M14: orbit robustness (dense KF arc + appearance bank)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee;
+      display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px;
+    }
+    h1 { font-size: 15px; font-weight: 600; margin: 4px 0; letter-spacing: .02em; }
+    #stage { position: relative; width: 640px; max-width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; overflow: hidden; }
+    #video, #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #video { object-fit: cover; }
+    #overlay { pointer-events: none; }
+    .controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: center; font-size: 13px; }
+    .stat { font-variant-numeric: tabular-nums; }
+    .stat b { color: #6ad; }
+    .grid { display: grid; grid-template-columns: auto auto; gap: 4px 18px; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .grid .k { color: #999; }
+    .grid .v { color: #6ad; text-align: right; }
+    button { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+    button:hover { background: #333; }
+    input[type=range] { width: 140px; }
+    #status { font-size: 12px; color: #999; min-height: 16px; }
+    #scanWrap { width: 640px; max-width: 100%; }
+    #scanLabel { font-size: 12px; color: #999; margin-bottom: 4px; }
+    #scanLabel b { color: #6ad; }
+    #scanBarBg { height: 8px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
+    #scanBar { height: 100%; width: 0%; background: #39a; transition: width .2s, background .2s; }
+    #scanBar.ready { background: #3c8; }
+  </style>
+</head>
+<body>
+  <h1>webslam · M14 — orbit robustness <span id="build" style="color:#3c8">(build M14)</span></h1>
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="controls">
+    <label>feature target <input id="thresh" type="range" min="150" max="1000" value="550" /></label>
+    <button id="modeBtn">switch to camera</button>
+    <button id="resetBtn">reset map</button>
+    <button id="motionBtn">enable motion</button>
+    <button id="sphereBtn">place sphere</button>
+    <button id="depthBtn">depth: off</button>
+    <button id="gyroAidBtn">gyro-aid: on</button>
+    <button id="recBtn">record</button>
+    <button id="replayBtn">replay file</button>
+    <input id="replayFileInput" type="file" accept=".wsrec" style="display:none">
+  </div>
+  <div class="grid">
+    <div class="k">state</div><div class="v" id="state">init</div>
+    <div class="k">map points</div><div class="v" id="mapPts">0</div>
+    <div class="k">keyframes</div><div class="v" id="kfs">0</div>
+    <div class="k">PnP inliers</div><div class="v" id="inliers">0</div>
+    <div class="k">scale (m / unit)</div><div class="v" id="scale">—</div>
+    <div class="k">scale confidence</div><div class="v" id="scaleConf">—</div>
+    <div class="k">metric move</div><div class="v" id="metricMove">—</div>
+    <div class="k">depth align</div><div class="v" id="depthAlign">—</div>
+    <div class="k">corners</div><div class="v" id="kpCount">0</div>
+    <div class="k">fps</div><div class="v" id="fps">0</div>
+  </div>
+  <div id="scanWrap">
+    <div id="scanLabel">scan coverage: <b id="scanPct">0%</b> — <span id="scanHint">move to map the area</span></div>
+    <div id="scanBarBg"><div id="scanBar"></div></div>
+  </div>
+  <div id="status">loading WASM…</div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

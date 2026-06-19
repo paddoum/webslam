@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>webslam — IMU diagnostics (VIO de-risk)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee;
+           display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px; }
+    h1 { font-size: 15px; font-weight: 600; margin: 4px 0; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 8px;
+             padding: 10px 14px; font-size: 14px; cursor: pointer; }
+    button:hover { background: #333; }
+    button:disabled { opacity: .4; }
+    .grid { display: grid; grid-template-columns: auto auto; gap: 4px 18px; font-size: 13px;
+            font-variant-numeric: tabular-nums; width: 100%; max-width: 460px; }
+    .grid .k { color: #999; } .grid .v { color: #6ad; text-align: right; }
+    .sec { font-size: 12px; color: #888; margin-top: 8px; align-self: flex-start; }
+    #verdict { font-size: 14px; font-weight: 600; min-height: 20px; text-align: center; }
+    .good { color: #4c9; } .warn { color: #db4; } .bad { color: #e55; }
+    #status { font-size: 12px; color: #999; min-height: 16px; text-align: center; }
+    video, #cam { display: none; }
+  </style>
+</head>
+<body>
+  <h1>IMU diagnostics — VIO de-risk</h1>
+  <div class="row">
+    <button id="startBtn">start sensors</button>
+    <button id="stillBtn" disabled>hold-still test (4s)</button>
+    <button id="syncBtn" disabled>sync test (shake, 6s)</button>
+  </div>
+  <div id="status">tap "start sensors" and allow motion access</div>
+
+  <div class="sec">live</div>
+  <div class="grid">
+    <div class="k">rotationRate available</div><div class="v" id="hasGyro">—</div>
+    <div class="k">acceleration (no gravity)</div><div class="v" id="hasAccel">—</div>
+    <div class="k">accel incl. gravity</div><div class="v" id="hasAccelG">—</div>
+    <div class="k">reported interval</div><div class="v" id="interval">—</div>
+    <div class="k">sample rate</div><div class="v" id="rate">—</div>
+    <div class="k">interval jitter (σ)</div><div class="v" id="jitter">—</div>
+    <div class="k">|gyro| now</div><div class="v" id="gnow">—</div>
+    <div class="k">|accel| now</div><div class="v" id="anow">—</div>
+    <div class="k">handler latency</div><div class="v" id="lat">—</div>
+  </div>
+
+  <div class="sec">at-rest (hold-still test)</div>
+  <div class="grid">
+    <div class="k">gyro bias |mean|</div><div class="v" id="gbias">—</div>
+    <div class="k">gyro noise (σ)</div><div class="v" id="gnoise">—</div>
+    <div class="k">accel mean magnitude</div><div class="v" id="amean">—</div>
+    <div class="k">accel noise (σ)</div><div class="v" id="anoise">—</div>
+  </div>
+
+  <div class="sec">camera ↔ IMU sync (shake test)</div>
+  <div class="grid">
+    <div class="k">estimated time offset</div><div class="v" id="offset">—</div>
+    <div class="k">correlation quality</div><div class="v" id="corr">—</div>
+  </div>
+
+  <div id="verdict"></div>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="cam" width="160" height="120"></canvas>
+
+  <script src="./imu.js"></script>
+</body>
+</html>
