@@ -106,7 +106,14 @@ std::vector<Keypoint> detectFAST(const std::uint8_t* gray, int width, int height
     }
   }
 
-  // Keep the strongest `maxFeatures` corners.
+  // Keep the strongest `maxFeatures` corners (global top-K).
+  // NOTE (Phase 3): a grid-based per-cell selection was tried here to spread
+  // features spatially, but on the orbit bench clip it *regressed* tracking
+  // badly (lost 0->48, orbit inliers ->0) — during an orbit it spends budget on
+  // cells that no longer overlap the map, starving the inliers the tracker needs.
+  // Reverted to global top-K. Spatial-spread selection stays a possible
+  // robustness experiment, but must only spread among map-overlapping regions
+  // and be validated on its own, not bundled into a perf pass. See docs/bench.
   if (static_cast<int>(kps.size()) > maxFeatures) {
     std::nth_element(kps.begin(), kps.begin() + maxFeatures, kps.end(),
                      [](const Keypoint& a, const Keypoint& b) { return a.score > b.score; });

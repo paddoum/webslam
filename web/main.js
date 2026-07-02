@@ -64,6 +64,7 @@ let recording = false, recStartMs = 0;
 let recFrames = [];   // [{tMs, y: Uint8Array}]  raw grayscale, captured sync
 let recImu   = [];   // [{tMs, gx,gy,gz,ax,ay,az}]  device-frame
 let replayActive = false;
+let replayFrameDt = 0;   // recorded inter-frame dt (s) for the current replay step
 
 // ─── Bench (Phase 0): deterministic per-stage timing from a .wsrec replay ──────
 // Enable with ?bench=1 — replay runs unpaced (as fast as possible) and every
@@ -470,9 +471,17 @@ function step() {
     recFrames.push({tMs: performance.now() - recStartMs, y: Y});
   }
   // Gyro-derived motion hint: expected feature shift this frame ≈ ω·dt·focal.
-  const nowMs = performance.now();
-  const dt = lastFrameMs ? Math.min(0.2, Math.max(0.005, (nowMs - lastFrameMs) / 1000)) : 0.033;
-  lastFrameMs = nowMs;
+  // In replay we MUST use the recorded inter-frame dt (not wall-clock): under an
+  // unpaced bench the wall-clock delta is tiny and load-dependent, which would
+  // make the gyro prior — and hence tracking/RANSAC/loss — non-deterministic.
+  let dt;
+  if (mode === 'replay') {
+    dt = replayFrameDt > 0 ? Math.min(0.2, replayFrameDt) : 0.033;
+  } else {
+    const nowMs = performance.now();
+    dt = lastFrameMs ? Math.min(0.2, Math.max(0.005, (nowMs - lastFrameMs) / 1000)) : 0.033;
+    lastFrameMs = nowMs;
+  }
   engine.setMotionHint(gyroMag * dt * FX);
   // Gyro rotation PRIOR (not just a search-radius hint): reorient the pose
   // prediction so fast turns / orbiting an object don't drop tracking, and so
@@ -966,7 +975,7 @@ async function loadAndReplay(file) {
     : `replaying ${frameEvents.length} frames…`;
 
   const wallStart = performance.now(), recStart = events[0]?.tMs ?? 0;
-  let lastImuTMs = 0;
+  let lastImuTMs = 0, lastFrameEvTMs = 0;
 
   for (const ev of events) {
     if (!replayActive) break;
@@ -989,6 +998,10 @@ async function loadAndReplay(file) {
       }
       lastImuTMs = ev.tMs;
     } else if (ev.type === 1) {
+      // Recorded inter-frame dt so the gyro prior / motion hint are faithful and
+      // deterministic regardless of (unpaced) replay speed.
+      replayFrameDt = lastFrameEvTMs > 0 ? (ev.tMs - lastFrameEvTMs) / 1000 : 0.033;
+      lastFrameEvTMs = ev.tMs;
       pctx.drawImage(ev.bitmap, 0, 0);
       step();
     }
@@ -1042,6 +1055,13 @@ function downloadText(text, name) {
 
 // debug: last frame's per-stage ms [grayscale, detect, orb, mapProc, total]
 window.__stages = () => engine ? Array.from(engine.stageTimes()) : null;
+// debug: full bench trace (populated after a ?bench=1 replay) + replay-from-URL helper
+window.__benchRows = () => benchRows;
+window.__replayUrl = async (url) => {
+  const b = await (await fetch(url)).blob();
+  await loadAndReplay(new File([b], 'rec.wsrec'));
+  return benchRows.length;
+};
 window.__anchor = () => anchorWorld;  // debug: read the anchored world point
 window.__sphereUV = () => {           // debug: current sphere projection
   if (!anchorWorld) return null;

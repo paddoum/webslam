@@ -31,18 +31,20 @@ const std::array<BriefPair, kNumBits>& briefPattern() {
   return pattern;
 }
 
-// 3x3 box-averaged intensity sample (clamped), for BRIEF stability.
-inline int sampleSmooth(const std::uint8_t* gray, int w, int h, int x, int y) {
-  int sum = 0, cnt = 0;
-  for (int dy = -1; dy <= 1; ++dy) {
-    for (int dx = -1; dx <= 1; ++dx) {
-      int xx = x + dx, yy = y + dy;
-      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-      sum += gray[yy * w + xx];
-      ++cnt;
-    }
-  }
-  return cnt ? sum / cnt : 0;
+// 3x3 box-averaged intensity sample via a precomputed integral image (Phase 3).
+// `integ` is (w+1)x(h+1), integ[y*(w+1)+x] = sum of gray over [0,x)x[0,y). The
+// box is clamped to the image and averaged over the in-bounds area — bit-identical
+// to the previous per-neighbour 3x3 average, but O(1) instead of 9 loads/adds.
+inline int sampleSmooth(const std::uint32_t* integ, int w, int h, int x, int y) {
+  const int x0 = x - 1 < 0 ? 0 : x - 1;
+  const int y0 = y - 1 < 0 ? 0 : y - 1;
+  const int x1 = x + 1 > w - 1 ? w - 1 : x + 1;
+  const int y1 = y + 1 > h - 1 ? h - 1 : y + 1;
+  const int st = w + 1;
+  const std::uint32_t s = integ[(y1 + 1) * st + (x1 + 1)] - integ[y0 * st + (x1 + 1)]
+                        - integ[(y1 + 1) * st + x0] + integ[y0 * st + x0];
+  const int area = (x1 - x0 + 1) * (y1 - y0 + 1);
+  return (int)(s / (std::uint32_t)area);
 }
 
 // Intensity-centroid orientation (Rosten/Rublee).
@@ -69,6 +71,22 @@ void computeOrb(const std::uint8_t* gray, int width, int height,
   out.x.clear(); out.y.clear(); out.angle.clear(); out.desc.clear();
   const auto& pattern = briefPattern();
 
+  // Precompute the integral image once per frame so each BRIEF sample's 3x3 box
+  // average is an O(1) lookup (Phase 3). Row-then-column prefix sums.
+  const int st = width + 1;
+  static thread_local std::vector<std::uint32_t> integ;
+  integ.assign((size_t)st * (height + 1), 0);
+  for (int y = 0; y < height; ++y) {
+    std::uint32_t rowSum = 0;
+    const std::uint8_t* g = gray + (size_t)y * width;
+    const std::uint32_t* up = integ.data() + (size_t)y * st;
+    std::uint32_t* cur = integ.data() + (size_t)(y + 1) * st;
+    for (int x = 0; x < width; ++x) {
+      rowSum += g[x];
+      cur[x + 1] = up[x + 1] + rowSum;
+    }
+  }
+
   for (const auto& kp : kps) {
     const int cx = (int)std::lround(kp.x);
     const int cy = (int)std::lround(kp.y);
@@ -85,8 +103,8 @@ void computeOrb(const std::uint8_t* gray, int width, int height,
       const int ay = cy + (int)std::lround(bp.ax * st + bp.ay * ct);
       const int bx = cx + (int)std::lround(bp.bx * ct - bp.by * st);
       const int by = cy + (int)std::lround(bp.bx * st + bp.by * ct);
-      const int va = sampleSmooth(gray, width, height, ax, ay);
-      const int vb = sampleSmooth(gray, width, height, bx, by);
+      const int va = sampleSmooth(integ.data(), width, height, ax, ay);
+      const int vb = sampleSmooth(integ.data(), width, height, bx, by);
       if (va < vb) d[i >> 5] |= (1u << (i & 31));
     }
 

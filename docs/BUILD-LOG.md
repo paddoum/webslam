@@ -828,3 +828,31 @@ scene tracks (2200 pts / 80 KFs / 101 inliers), scale self-test recovers 0.0528
 (true 0.05), no console errors. Post-Phase-1 synthetic baseline: grayscale 0.01 ·
 detect 0.65 · orb 1.76 · mapProc 3.99 · total 6.4 ms. **Real baseline pending a
 camera `.wsrec`** — synthetic is not representative of a textured phone workload.
+
+---
+
+## Perf Phase 3 — ORB descriptor cost (2026-07-02)
+
+Driven by the first real per-stage baseline from an on-device orbit recording
+(`docs/bench/baseline-orbit.md`): median frame was fine (9 ms) but the **p95 tail
+was 29.5 ms** — orb (feature-count-scaled) and mapProc (reloc/BA spikes) owned it.
+
+**Integral-image BRIEF smoothing — shipped.** `computeOrb` builds one integral
+image per frame; each BRIEF endpoint's 3×3 box average is now an O(1) lookup instead
+of a 9-tap loop (512 endpoints/keypoint). Bit-identical descriptors — `test_orb`
+passes and the replay's lost/inlier counts match baseline *exactly*. On the orbit
+clip: **orb p95 12.9→8.6 ms (−33%), total p95 30.5→24.2 ms (−20%), tracking
+unchanged** (lost 12/798 both; orbit inlier p50 19 both).
+
+**Grid feature selection — tried and reverted.** Meant to spread features for orbit
+coverage, but on this clip it starves inliers during the orbit (budget spent on cells
+that no longer overlap the map). Per the "don't regress orbit robustness" guardrail,
+shelved as a separate map-aware experiment; kept global top-K.
+
+**Harness fidelity fix.** A/B revealed the replay used wall-clock `dt` for the gyro
+prior, making tracking non-deterministic under an unpaced bench (lost swung 0/12/39
+on one binary). Replay now uses the **recorded** inter-frame dt → deterministic,
+faithful reproduction of the phone's ~29 ms/frame. Stage timings were always stable.
+
+Next: Phase 5 (the mapProc reloc-RANSAC / KF-insert-BA spikes, up to ~46 ms).
+All 16 native suites + WASM smoke pass; shipped build boots clean, bench reproduces.

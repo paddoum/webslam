@@ -4,3 +4,7 @@ build/
 *.a
 node_modules/
 .DS_Store
+
+# Recordings kept local (large, regenerable via ?bench=1)
+*.wsrec
+web/rec.wsrec

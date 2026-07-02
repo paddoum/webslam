@@ -15,7 +15,15 @@ is gated on the measurement harness in Phase 0 so we tune against numbers, not v
   2354 v128 SIMD instructions in the binary (grayscale now ~0.01 ms — near free);
   VI/BA/scale tests unchanged (numerical parity held). Awaiting a real orbit `.wsrec`
   to quantify the phone-workload win vs baseline.
-- ⏳ Phases 2–5 — pending; run the bench before/after each.
+- ✅ **Phase 3 (ORB)** — partial. **Integral-image BRIEF smoothing shipped**:
+  bit-identical descriptors, **−20% total p95 / −33% orb p95** on the orbit clip,
+  zero tracking change (see `docs/bench/baseline-orbit.md`). **Grid feature selection
+  reverted** — didn't help orbit robustness and risks starving inliers; shelved as a
+  separate map-aware experiment. Also fixed a replay-fidelity bug (wall-clock dt →
+  recorded dt) so the bench is now deterministic. Remaining ORB headroom: orientation
+  patch cost, SIMD BRIEF compare/pack.
+- ⏳ Phases 2, 4, 5 — pending; run the bench before/after each. Next best target is
+  **Phase 5** (the `mapProc` reloc/BA spikes, up to ~46 ms, own the remaining tail).
 
 > Baseline (synthetic scene, full 2200-pt/80-KF map, this dev machine, post-Phase-1):
 > grayscale 0.01 · detect 0.65 · orb 1.76 · mapProc 3.99 · **total 6.4 ms**.
