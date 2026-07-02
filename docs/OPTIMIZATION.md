@@ -22,8 +22,16 @@ is gated on the measurement harness in Phase 0 so we tune against numbers, not v
   separate map-aware experiment. Also fixed a replay-fidelity bug (wall-clock dt →
   recorded dt) so the bench is now deterministic. Remaining ORB headroom: orientation
   patch cost, SIMD BRIEF compare/pack.
-- ⏳ Phases 2, 4, 5 — pending; run the bench before/after each. Next best target is
-  **Phase 5** (the `mapProc` reloc/BA spikes, up to ~46 ms, own the remaining tail).
+- ✅ **Phase 5 (RANSAC/matching)** — shipped. **Adaptive RANSAC termination** in
+  `solvePnP` (early-exit at 99% confidence) + **64-bit popcount** in `hamming`. On the
+  orbit clip: **worst frame 120→47 ms (−61%), mapProc spike frames 18→9, total p95
+  −11%** — and tracking *improved* (losses 12→5) because early-exit keeps the
+  motion-consistent guess pose. Deterministic; `test_pnp`/`test_reloc` pass. Note:
+  adaptive RANSAC changes the accepted hypothesis (not a pure speedup) — stabilizing by
+  design, but watch lost/inlier on future clips. See `docs/bench/baseline-orbit.md`.
+- ⏳ Phases 2, 4 — pending. Remaining tail is **KF-insert BA on the main thread** →
+  best addressed by **Phase 4** (move SLAM/BA off the main thread) rather than cutting
+  BA quality. Cumulative so far: total p95 29.5→23.4 ms (−21%), max 61.8→47 ms (−24%).
 
 > Baseline (synthetic scene, full 2200-pt/80-KF map, this dev machine, post-Phase-1):
 > grayscale 0.01 · detect 0.65 · orb 1.76 · mapProc 3.99 · **total 6.4 ms**.

@@ -162,9 +162,28 @@ PnPResult solvePnP(const std::vector<Vector3d>& worldPts,
     bestR = R; bestT = t; bestInliers = c; bestMask = mask;
   }
 
+  // Adaptive RANSAC (Phase 5): stop as soon as the best-so-far inlier ratio makes
+  // further sampling pointless at 99% confidence. With a good pose guess the
+  // seeded hypothesis usually already clears this, so tracking-PnP exits in a
+  // couple of iterations, and the no-guess relocalization path (300 max iters)
+  // terminates far earlier when it finds a strong solution — cutting the worst
+  // per-frame spikes without changing the accepted result.
+  auto neededIters = [&](int inl) -> int {
+    const double p = (double)inl / (double)n;          // inlier ratio
+    if (p >= 1.0) return 0;
+    if (p <= 0.0) return iterations;
+    const double denom = std::log(1.0 - std::pow(p, 6));  // s=6 minimal sample
+    if (denom >= 0.0) return iterations;
+    const double num = std::log(1.0 - 0.99);
+    const double need = std::ceil(num / denom);
+    return need > iterations ? iterations : (int)need;
+  };
+
   std::vector<Vector3d> sX(6);
   std::vector<Vector2d> sxn(6);
-  for (int it = 0; it < iterations; ++it) {
+  int adaptiveMax = iterations;
+  if (hasGuess && bestInliers > 0) adaptiveMax = std::min(iterations, std::max(1, neededIters(bestInliers)));
+  for (int it = 0; it < adaptiveMax; ++it) {
     int idx[6];
     for (int k = 0; k < 6; ++k) {
       bool dup; do { idx[k] = rng.below(n); dup = false; for (int j = 0; j < k; ++j) dup |= idx[j] == idx[k]; } while (dup);
@@ -175,7 +194,10 @@ PnPResult solvePnP(const std::vector<Vector3d>& worldPts,
     refineGN(worldPts, imgPts, K, R, t, 3);  // a few iters to settle the hypothesis
     std::vector<char> mask(n, 0);
     int c = countInliers(R, t, mask);
-    if (c > bestInliers) { bestInliers = c; bestR = R; bestT = t; bestMask = mask; }
+    if (c > bestInliers) {
+      bestInliers = c; bestR = R; bestT = t; bestMask = mask;
+      adaptiveMax = std::min(iterations, std::max(it + 1, neededIters(bestInliers)));
+    }
   }
 
   if (bestInliers < 6) return res;

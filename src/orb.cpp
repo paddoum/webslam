@@ -1,6 +1,7 @@
 #include "orb.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace webslam {
 
@@ -116,9 +117,16 @@ void computeOrb(const std::uint8_t* gray, int width, int height,
 }
 
 namespace {
+// 256-bit Hamming distance via 64-bit popcounts (Phase 5): 4 popcountll instead
+// of 8 popcount. Same total bit count — result is identical. memcpy is the
+// aliasing-safe way to view the uint32[8] descriptor as uint64[4]; it compiles
+// away under -O3.
 inline int hamming(const Descriptor& a, const Descriptor& b) {
+  std::uint64_t av[4], bv[4];
+  std::memcpy(av, a.data(), 32);
+  std::memcpy(bv, b.data(), 32);
   int d = 0;
-  for (int i = 0; i < 8; ++i) d += __builtin_popcount(a[i] ^ b[i]);
+  for (int i = 0; i < 4; ++i) d += __builtin_popcountll(av[i] ^ bv[i]);
   return d;
 }
 }  // namespace

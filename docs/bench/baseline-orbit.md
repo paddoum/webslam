@@ -92,3 +92,48 @@ be validated on its own). Kept the global top-K selection.
 **Takeaway:** the p95 tail (jank) dropped 20% with zero tracking change. The `mapProc`
 spikes (reloc 300-iter RANSAC + KF-insert BA, up to ~46 ms) remain the next target —
 Phase 5.
+
+---
+
+## Phase 5 result — adaptive RANSAC + 64-bit popcount (shipped)
+
+Target: the `mapProc` spikes (global-relocalization 300-iter RANSAC on LOST frames;
+KF-insert BA). Two changes: **adaptive RANSAC termination** in `solvePnP` (stop once
+the best inlier ratio makes more sampling pointless at 99% confidence — the seeded
+pose guess usually clears this immediately, and the no-guess reloc path exits far
+earlier when it finds a strong solution) and **64-bit popcount** in `hamming` (4
+popcountll vs 8 popcount; identical result; helps the reloc brute-force match most).
+
+A/B on `rec.wsrec` (Phase 3 = A, Phase 5 = B), deterministic harness, both reproduced:
+
+| metric              | Phase 3 (A) | Phase 5 (B) | Δ |
+|---------------------|------------:|------------:|---:|
+| **total max (ms)**  | 120         | **47**      | **−61%** |
+| **mapProc max (ms)**| 108.6       | **43.7**    | **−60%** |
+| mapProc frames >20ms| 18          | **9**       | **−50%** |
+| mapProc p95 (ms)    | 13.5        | 11.8        | −13% |
+| total p95 (ms)      | 26.2        | 23.4        | −11% |
+| lost frames         | 12          | **5**       | fewer |
+| orbit inlier p50    | 19          | **29**      | higher |
+
+The headline is the **worst-frame spike: 120→47 ms** — the dropped-frame stutters are
+gone. Tracking also *improved* (losses 12→5, inliers up): adaptive RANSAC only
+early-exits when the inlier ratio is confidently high, so it keeps the motion-consistent
+guess-refined pose instead of switching to a marginally-different random hypothesis —
+which stabilizes tracking frame-to-frame. On a poor guess it still runs full iterations,
+so it self-adjusts. Deterministic (lost=5 both runs); all native suites incl. `test_pnp`
+/`test_reloc` pass.
+
+**Note:** adaptive RANSAC is not a pure speedup — it changes which hypothesis is
+accepted (searches less). On this clip that helped; the mechanism is stabilizing by
+design, but future clips should keep an eye on the lost/inlier numbers, not just timing.
+
+### Cumulative (baseline → Phase 5)
+
+| metric        | M14 baseline | Phase 5 | Δ |
+|---------------|-------------:|--------:|---:|
+| total p95 (ms)| 29.5         | 23.4    | −21% |
+| total max (ms)| 61.8         | 47      | −24% |
+
+(Remaining tail is KF-insert BA on the main thread — best addressed by **Phase 4**,
+moving SLAM/BA off the main thread, rather than cutting BA quality.)

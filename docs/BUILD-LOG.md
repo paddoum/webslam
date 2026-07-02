@@ -856,3 +856,32 @@ faithful reproduction of the phone's ~29 ms/frame. Stage timings were always sta
 
 Next: Phase 5 (the mapProc reloc-RANSAC / KF-insert-BA spikes, up to ~46 ms).
 All 16 native suites + WASM smoke pass; shipped build boots clean, bench reproduces.
+
+---
+
+## Perf Phase 5 — RANSAC / matching spikes (2026-07-02)
+
+Target: the mapProc tail from the orbit baseline — global relocalization (300-iter
+RANSAC on LOST frames) and KF-insert BA, up to ~46 ms (worst single frame 120 ms).
+
+**Adaptive RANSAC termination** (solvePnP): after each hypothesis, stop once the
+best-so-far inlier ratio makes further sampling pointless at 99% confidence
+(N = log(1-.99)/log(1-p^6)). With a pose guess the seeded hypothesis usually already
+clears the bar → tracking-PnP exits in ~1-2 iters; the no-guess reloc path (300 max)
+terminates far earlier on a strong solution. **64-bit popcount** in hamming (4
+popcountll vs 8 popcount; identical result) speeds the reloc brute-force match.
+
+A/B on the orbit clip (Phase 3 vs Phase 5, deterministic harness):
+worst frame **120→47 ms (-61%)**, mapProc spike frames (>20 ms) **18→9**, total p95
+26.2→23.4 ms. Tracking *improved* too — **lost 12→5**, orbit-region inlier p50 19→29 —
+because early-exit keeps the motion-consistent guess-refined pose rather than jumping
+to a marginally-higher-inlier random hypothesis; on a poor guess it still runs full
+iterations, so it self-adjusts. Deterministic across runs; all 16 native suites incl.
+test_pnp/test_reloc + WASM smoke pass; shipped build boots clean and reproduces.
+
+Caveat (honest): adaptive RANSAC changes *which* hypothesis is accepted (it searches
+less), so it's not a pure speedup. Stabilizing by design and a win on this clip, but
+future clips should watch lost/inlier counts, not only timing.
+
+Cumulative (M14 baseline → Phase 5): total p95 29.5→23.4 ms (-21%), max 61.8→47 ms
+(-24%). Remaining tail is main-thread KF-insert BA → Phase 4 (off-thread), not BA cuts.
