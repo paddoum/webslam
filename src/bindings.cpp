@@ -64,6 +64,11 @@ val poseTView(const SlamEngine& e) {
   return val(typed_memory_view(v.size(), v.data()));
 }
 
+val stageTimesView(const SlamEngine& e) {
+  const auto& v = e.stageTimesFlat();
+  return val(typed_memory_view(v.size(), v.data()));
+}
+
 }  // namespace
 
 EMSCRIPTEN_BINDINGS(webslam_module) {
@@ -73,6 +78,7 @@ EMSCRIPTEN_BINDINGS(webslam_module) {
       .function("inputView", &inputView)
       .function("setIntrinsics", &SlamEngine::setIntrinsics)
       .function("processFrame", &SlamEngine::processFrame)
+      .function("stageTimes", &stageTimesView)
       .function("keypoints", &keypointsView)
       .function("trackingOk", &SlamEngine::trackingOk)
       .function("trackingInliers", &SlamEngine::trackingInliers)

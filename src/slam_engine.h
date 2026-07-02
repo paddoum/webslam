@@ -56,6 +56,12 @@ class SlamEngine {
   // Returns the number of keypoints found.
   int processFrame(int width, int height, int threshold);
 
+  // Per-frame stage timings in milliseconds (wall clock). Always populated —
+  // costs ~5 steady_clock reads/frame, negligible. Order:
+  // [grayscale, detect, orb, mapProcess, total]. Use with the .wsrec replay
+  // bench mode to get deterministic per-stage p50/p95 without a phone.
+  const std::vector<float>& stageTimesFlat() const { return stage_times_; }
+
   // --- M1 output ---
   const std::vector<float>& keypointsFlat() const { return keypoints_flat_; }
 
@@ -163,6 +169,9 @@ class SlamEngine {
   std::vector<float> trajectory_;
   std::vector<float> pose_r_{1, 0, 0, 0, 1, 0, 0, 0, 1};
   std::vector<float> pose_t_{0, 0, 0};
+
+  // [grayscale, detect, orb, mapProcess, total] ms — see stageTimesFlat().
+  std::vector<float> stage_times_{0, 0, 0, 0, 0};
 };
 
 }  // namespace webslam

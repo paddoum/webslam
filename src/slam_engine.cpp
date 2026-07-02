@@ -2,6 +2,7 @@
 
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "map.h"
@@ -64,6 +65,13 @@ inline float fastScore(const std::uint8_t* gray, int stride, int x, int y, int t
   float s = 0.0f;
   for (int i = 0; i < 16; ++i) s += std::abs(circle[i] - p);
   return s;
+}
+
+// Wall-clock milliseconds since an arbitrary epoch (portable: native + WASM).
+inline double nowMs() {
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 }  // namespace
@@ -197,8 +205,14 @@ int SlamEngine::processFrame(int width, int height, int threshold) {
   if (width > max_width_ || height > max_height_) return 0;
   last_w_ = width; last_h_ = height;
 
+  // Reset per-frame timings (mapFrame fills [2]=orb, [3]=mapProcess).
+  for (float& s : stage_times_) s = 0.0f;
+  const double t0 = nowMs();
+
   toGrayscale(width, height);
+  const double t1 = nowMs();
   keypoints_ = detectFAST(gray_.data(), width, height, threshold, max_features_);
+  const double t2 = nowMs();
 
   // Flatten for JS.
   keypoints_flat_.clear();
@@ -213,13 +227,21 @@ int SlamEngine::processFrame(int width, int height, int threshold) {
   } else if (tracking_) {
     trackFrame(width, height);
   }
+
+  stage_times_[0] = static_cast<float>(t1 - t0);   // grayscale
+  stage_times_[1] = static_cast<float>(t2 - t1);   // detect
+  stage_times_[4] = static_cast<float>(nowMs() - t0);  // total
   return static_cast<int>(keypoints_.size());
 }
 
 // M3: describe the frame and feed it to the persistent map (init -> PnP track).
 void SlamEngine::mapFrame(int width, int height) {
+  const double to0 = nowMs();
   computeOrb(gray_.data(), width, height, keypoints_, /*border=*/18, cur_);
+  const double to1 = nowMs();
   map_->process(cur_);
+  stage_times_[2] = static_cast<float>(to1 - to0);        // orb
+  stage_times_[3] = static_cast<float>(nowMs() - to1);    // map process (track + KF/BA)
 
   map_state_ = static_cast<int>(map_->state());
   map_tracked_ = map_->tracked();

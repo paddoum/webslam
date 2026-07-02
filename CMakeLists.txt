@@ -34,6 +34,23 @@ add_executable(slam
 
 target_include_directories(slam PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Phase 1 optimization flags (see docs/OPTIMIZATION.md):
+#  -msimd128  WASM SIMD — autovectorizes luma / FAST / popcount / BRIEF, and
+#             lets Eigen use packed math. Requires a SIMD-capable browser
+#             (modern mobile Safari / Chrome); keep an eye on target support.
+#  -flto      link-time optimization — inlines across TUs (hammingDistance,
+#             fastScore, etc). Applied at both compile and link.
+target_compile_options(slam PRIVATE -O3 -msimd128 -flto)
+
+# -ffast-math ONLY on the vision kernels. These do luma, FAST scoring, and ORB
+# descriptor extraction — no NaN/inf reliance. It is deliberately NOT applied to
+# the VI-init, IMU preintegration, BA, or PnP solvers (two_view/pnp/ba/vi_*),
+# which depend on well-behaved float semantics (allFinite() guards, associativity).
+set_source_files_properties(
+  src/slam_engine.cpp src/orb.cpp
+  PROPERTIES COMPILE_OPTIONS "-ffast-math"
+)
+
 # Emscripten link flags: build an ES6 module exposing an Embind interface.
 set_target_properties(slam PROPERTIES
   OUTPUT_NAME "slam"
@@ -44,6 +61,8 @@ set_target_properties(slam PROPERTIES
     -sEXPORT_NAME=createSlamModule \
     -sALLOW_MEMORY_GROWTH=1 \
     -sENVIRONMENT=web,worker,node \
-    -sINITIAL_MEMORY=33554432 \
+    -sINITIAL_MEMORY=67108864 \
+    -msimd128 \
+    -flto \
     -O3 \
   ")

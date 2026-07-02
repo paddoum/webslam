@@ -65,6 +65,14 @@ let recFrames = [];   // [{tMs, y: Uint8Array}]  raw grayscale, captured sync
 let recImu   = [];   // [{tMs, gx,gy,gz,ax,ay,az}]  device-frame
 let replayActive = false;
 
+// ─── Bench (Phase 0): deterministic per-stage timing from a .wsrec replay ──────
+// Enable with ?bench=1 — replay runs unpaced (as fast as possible) and every
+// frame's engine.stageTimes() [grayscale, detect, orb, mapProcess, total] is
+// collected, then reduced to p50/p95/max and offered as a CSV download.
+const BENCH = new URLSearchParams(location.search).get('bench') === '1';
+let benchCollect = false;
+let benchRows = [];   // [frameIdx, gray, detect, orb, mapProc, total, pts, kfs, inliers, state]
+
 // ---- synthetic 3D scene (cloud of points, moving virtual camera) ----
 const scene = (() => {
   const pts = [];
@@ -694,6 +702,13 @@ function step() {
     : (yawFrac < pitchFrac) ? `keep panning left/right (${yawDeg.toFixed(0)}°/${YAW_TARGET}°)`
     : `keep tilting up/down (${pitchDeg.toFixed(0)}°/${PITCH_TARGET}°)`;
 
+  if (benchCollect) {
+    const s = engine.stageTimes();  // [gray, detect, orb, mapProc, total]
+    benchRows.push([frameIdx, s[0], s[1], s[2], s[3], s[4],
+      engine.mapNumPoints(), engine.mapNumKeyframes(),
+      tracking ? engine.trackingInliers() : 0, engine.mapState()]);
+  }
+
   frameIdx++;
   return { n, state: engine.mapState(), pts: engine.mapNumPoints(), kfs: engine.mapNumKeyframes(),
            inliers: engine.trackingInliers(), tracked: engine.mapTracked(), reproj: drawn };
@@ -943,17 +958,23 @@ async function loadAndReplay(file) {
   const prevMode = mode;
   mode = 'replay';
   replayActive = true;
+  benchCollect = BENCH;
+  benchRows = [];
   el('recBtn').disabled = true;
-  el('status').textContent = `replaying ${frameEvents.length} frames…`;
+  el('status').textContent = BENCH
+    ? `benchmarking ${frameEvents.length} frames (unpaced)…`
+    : `replaying ${frameEvents.length} frames…`;
 
   const wallStart = performance.now(), recStart = events[0]?.tMs ?? 0;
   let lastImuTMs = 0;
 
   for (const ev of events) {
     if (!replayActive) break;
-    // Pace to original speed
-    const wait = (wallStart + ev.tMs - recStart) - performance.now();
-    if (wait > 4) await new Promise(r => setTimeout(r, wait - 2));
+    // Pace to original speed — UNLESS benchmarking, where we run flat out.
+    if (!BENCH) {
+      const wait = (wallStart + ev.tMs - recStart) - performance.now();
+      if (wait > 4) await new Promise(r => setTimeout(r, wait - 2));
+    }
 
     if (ev.type === 2) {
       gyroVec = [ev.gx, ev.gy, ev.gz];
@@ -977,11 +998,50 @@ async function loadAndReplay(file) {
   for (const ev of frameEvents) { ev.bitmap?.close(); delete ev.bitmap; }
 
   replayActive = false;
+  benchCollect = false;
   mode = prevMode;
   el('recBtn').disabled = false;
-  el('status').textContent = 'replay done';
+  if (BENCH && benchRows.length) reportBench();
+  else el('status').textContent = 'replay done';
 }
 
+// Reduce collected per-frame stage times to p50/p95/max and offer a CSV.
+function reportBench() {
+  const STAGES = ['grayscale', 'detect', 'orb', 'mapProc', 'total'];
+  const pct = (arr, p) => {
+    const s = [...arr].sort((a, b) => a - b);
+    return s[Math.min(s.length - 1, Math.floor(p / 100 * s.length))];
+  };
+  const lines = [];
+  console.log(`%c[bench] ${benchRows.length} frames`, 'font-weight:bold');
+  console.log('stage        p50      p95      max   (ms)');
+  for (let k = 0; k < STAGES.length; k++) {
+    const col = benchRows.map(r => r[1 + k]);
+    const row = `${STAGES[k].padEnd(10)} ${pct(col,50).toFixed(2).padStart(7)} ${pct(col,95).toFixed(2).padStart(8)} ${Math.max(...col).toFixed(2).padStart(8)}`;
+    console.log(row);
+    lines.push(`${STAGES[k]},${pct(col,50).toFixed(3)},${pct(col,95).toFixed(3)},${Math.max(...col).toFixed(3)}`);
+  }
+  const p50t = pct(benchRows.map(r => r[5]), 50);
+  const p95t = pct(benchRows.map(r => r[5]), 95);
+  el('status').textContent = `bench: ${benchRows.length} frames · total p50 ${p50t.toFixed(1)}ms p95 ${p95t.toFixed(1)}ms · CSVs downloaded`;
+
+  // Summary CSV (per-stage percentiles).
+  const summary = 'stage,p50_ms,p95_ms,max_ms\n' + lines.join('\n') + '\n';
+  downloadText(summary, `bench-summary-${Date.now()}.csv`);
+  // Per-frame CSV (full trace).
+  const header = 'frame,gray_ms,detect_ms,orb_ms,mapProc_ms,total_ms,pts,kfs,inliers,state\n';
+  const body = benchRows.map(r => r.map((v, i) => i === 0 || i > 5 ? v : v.toFixed(3)).join(',')).join('\n');
+  downloadText(header + body + '\n', `bench-frames-${Date.now()}.csv`);
+}
+
+function downloadText(text, name) {
+  const url = URL.createObjectURL(new Blob([text], {type: 'text/csv'}));
+  Object.assign(document.createElement('a'), {href: url, download: name}).click();
+  URL.revokeObjectURL(url);
+}
+
+// debug: last frame's per-stage ms [grayscale, detect, orb, mapProc, total]
+window.__stages = () => engine ? Array.from(engine.stageTimes()) : null;
 window.__anchor = () => anchorWorld;  // debug: read the anchored world point
 window.__sphereUV = () => {           // debug: current sphere projection
   if (!anchorWorld) return null;

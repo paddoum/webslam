@@ -798,3 +798,33 @@ live toggle. All 16 native suites + WASM smoke pass; in-browser loads clean, the
 toggle flips, 60 synthetic frames run without error. **Live phone test (2026-06-15): gyro-aid: on beats gyro-aid: off.** Confirmed on
 device — tracking is noticeably more stable with the gyro prior enabled. M13
 validated end-to-end.
+
+---
+
+## Perf Phase 0 + 1 — measurement harness + build flags (2026-07-02)
+
+Kicked off the optimization track (full plan in `docs/OPTIMIZATION.md`).
+
+**Phase 0 — measurement.** `SlamEngine` now times each frame stage with portable
+`std::chrono::steady_clock` (~5 reads/frame, negligible) and exposes
+`stageTimesFlat()` → `[grayscale, detect, orb, mapProcess, total]` ms via the
+Embind `engine.stageTimes()` view (+ `window.__stages()` debug hook). The `.wsrec`
+replay gained a **`?bench=1` mode**: it runs unpaced (flat out), collects every
+frame's stage times, and downloads two CSVs — `bench-summary` (p50/p95/max per
+stage) and `bench-frames` (full trace). This turns any recording into a
+deterministic, phone-free benchmark.
+
+**Phase 1 — build flags.** `-msimd128` + `-flto` applied globally; `-ffast-math`
+scoped to the vision kernels only (`orb.cpp`, `slam_engine.cpp`) — deliberately
+NOT on the VI-init/IMU/BA/PnP solvers, which rely on well-behaved float semantics
+(`allFinite()` guards, associativity). `INITIAL_MEMORY` 32→64 MB to cut
+growth-copy jank.
+
+**Verification.** All 16 native suites + WASM smoke pass; VI/BA/scale outputs
+unchanged (numerical parity held, so the scoped fast-math is safe). The built
+`slam.wasm` contains **2354 v128 SIMD instructions** (grayscale dropped to
+~0.01 ms — effectively free). In-browser: boots clean on the new build, synthetic
+scene tracks (2200 pts / 80 KFs / 101 inliers), scale self-test recovers 0.0528
+(true 0.05), no console errors. Post-Phase-1 synthetic baseline: grayscale 0.01 ·
+detect 0.65 · orb 1.76 · mapProc 3.99 · total 6.4 ms. **Real baseline pending a
+camera `.wsrec`** — synthetic is not representative of a textured phone workload.
