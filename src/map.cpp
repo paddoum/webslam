@@ -111,7 +111,17 @@ bool SlamMap::process(const OrbFeatures& f) {
   // global relocalization, which stays as the last resort.
   bool ok = false;
   if (state_ == State::kTracking || state_ == State::kLost) ok = trackByProjection(f);
-  if (!ok) ok = relocalizeGlobal(f);
+  if (!ok) {
+    // Budgeted global reloc (see relocCooldownFrames in map.h): immediate on the
+    // first lost frame, throttled afterwards so lost frames stay cheap and the
+    // camera pipeline keeps breathing — projection re-acquire runs every frame.
+    if (state_ != State::kLost || framesSinceReloc_ >= relocCooldownFrames) {
+      framesSinceReloc_ = 0;
+      ok = relocalizeGlobal(f);
+    } else {
+      ++framesSinceReloc_;
+    }
+  }
 
   if (!ok) {
     state_ = State::kLost;

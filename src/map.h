@@ -89,6 +89,14 @@ class SlamMap {
   double kfDiversityDeg = 20.0;     // min angular gap (°) a KF must have to be kept
   // Relocalization (recover from loss).
   int relocMinInliers = 25;          // strict acceptance to avoid false relocalization
+  // Reloc budget: global reloc (full-map brute-force match + 300-iter RANSAC) costs
+  // ~100 ms — running it EVERY lost frame starves the camera pipeline on-device,
+  // which widens inter-frame motion and prevents the very re-acquisition it's
+  // trying to achieve (death spiral seen on the sphere-orbit clip). Attempt it on
+  // the FIRST lost frame (brief losses recover instantly), then only every
+  // relocCooldownFrames while lost; skipped frames still run the cheap
+  // gyro-coasted projection re-acquire.
+  int relocCooldownFrames = 4;
   // Track-by-projection (robust to viewpoint change while tracking).
   double trackSearchRadiusPx = 36;   // base search window around a predicted projection
   double trackMaxSearchPx = 150;     // adaptive cap for fast motion
@@ -141,6 +149,7 @@ class SlamMap {
   bool haveGyro_ = false;               // a gyro prior is set for this frame
   std::vector<DMatch> lastMapMatches_;  // map-point -> feature, for KF insertion
   int frameCounter_ = 0;                // monotonic frame index (for lastSeen)
+  int framesSinceReloc_ = 0;            // lost-frames since the last global-reloc attempt
 
   std::vector<Eigen::Vector3d> trajectory_;
 };

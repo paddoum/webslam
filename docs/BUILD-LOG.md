@@ -918,3 +918,29 @@ verdict; if it underperforms DA2 there, `?depth=da2` is one URL param away.
 Also fixed: unpaced bench replay ran as one macrotask, starving worker messages
 (only 1 depth result per replay). Bench mode now yields per frame via MessageChannel
 (timer clamping doesn't apply), so async depth flows during replays.
+
+---
+
+## Reloc budget — fix the lost-state death spiral (2026-07-16)
+
+New failure clip from the phone: orbiting an AR sphere placed on a wood floor →
+tracking degrades from frame ~52, permanently lost from frame 82. Full diagnosis
+in `docs/bench/sphere-orbit-failure.md`. Two findings: (1) the floor is a
+worst-case scene — planar, repetitive, rotating in view — where appearance-only
+reloc structurally can't reach 25 inliers; (2) a **compute death spiral**: every
+lost frame ran the ~100 ms global reloc, capture dt spiked 43→128 ms at exactly
+the loss frames, and the starved camera pipeline widened inter-frame motion,
+preventing the very re-acquisition being attempted.
+
+**Shipped `relocCooldownFrames = 4`** (map.h/map.cpp): global reloc fires on the
+first lost frame, then every 4th; skipped frames still run the cheap gyro-coasted
+projection re-acquire. On the sphere clip: identical tracking outcome, mean
+lost-frame cost ~95→~35 ms. Orbit-clip regression: **bit-identical** (lost=5,
+orbit inlier p50=29). All native suites pass.
+
+Also learned (harness): `loadAndReplay` does NOT reset the map — replaying a
+second clip on a used page inherits the previous map. One fresh page load per
+measured replay.
+
+Next for this scene: KF-pose-seeded reloc (geometry disambiguates repetitive
+texture), reloc ratio 0.95→0.8, skip triangulation while tracking is weak.
