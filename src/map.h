@@ -16,6 +16,11 @@ struct MapPoint {
   Descriptor desc2;  // previous appearance (older viewpoint) — used as fallback in matching
   int observations;  // how many keyframes see it
   int lastSeen = 0;  // frame index when last matched (for sliding-window culling)
+  // Triangulated with real parallax (reliable depth). Low-parallax points from
+  // near-pure rotation are kept as a 2D tracking scaffold but marked
+  // !solid — the sliding-window cull ages them faster so they can't evict
+  // well-triangulated geometry when the map is at capacity.
+  bool solid = true;
 };
 
 // A keyframe: a pose plus the features observed there and their map-point links.
@@ -79,6 +84,19 @@ class SlamMap {
   int baWindowKeyframes = 7;         // local-BA sliding window size
   bool baEnabled = true;             // run local bundle adjustment on keyframe insert
   int maxMapPoints = 2200;           // sliding-window size: cull least-recently-seen beyond this
+  // Triangulation quality gates (KF insert). During near-pure rotation (a pan)
+  // the baseline is ~0 and depth is unobservable. Points below the parallax
+  // threshold still enter the map (they're a valid 2D tracking scaffold — a
+  // hard gate kills pan tracking entirely) but are marked !solid and aged
+  // faster by the cull, so they can't evict well-triangulated geometry.
+  // Reprojection failures are rejected outright (bad matches).
+  double triMinParallaxDeg = 1.0;    // below this ray angle -> provisional (!solid)
+  double triMaxReprojErrPx = 3.0;    // max reproj error in BOTH views (hard reject)
+  int cullSolidBonusFrames = 300;    // cull priority: solid points age this much slower
+  int cullRecentProtectFrames = 40;  // never cull points seen this recently (the
+                                     // current working set — even provisional ones;
+                                     // otherwise old solid points evict the very
+                                     // scaffold tracking is standing on)
   // Motion-gated keyframe insertion (stops bloat when near-stationary).
   int kfMinFrames = 5;               // minimum frames between keyframes
   int kfMaxFrames = 20;              // force a keyframe at least this often while moving

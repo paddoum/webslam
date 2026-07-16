@@ -1,6 +1,7 @@
 #include "map.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <unordered_map>
 
@@ -444,6 +445,7 @@ void SlamMap::insertKeyframe(const OrbFeatures& f, const std::vector<DMatch>& ma
   Matrix3d Rrel = curR_ * prev.R.transpose();
   Vector3d trel = curt_ - Rrel * prev.t;
 
+  const double cosMinParallax = std::cos(triMinParallaxDeg * M_PI / 180.0);
   for (const auto& m : dm) {
     if (prev.ptIndex[m.a] != -1 || kf.ptIndex[m.b] != -1) continue;  // already mapped
     Vector2d a(prev.feat.x[m.a], prev.feat.y[m.a]);
@@ -452,9 +454,33 @@ void SlamMap::insertKeyframe(const OrbFeatures& f, const std::vector<DMatch>& ma
     Vector2d xn2((b.x() - K_.cx) / K_.fx, (b.y() - K_.cy) / K_.fy);
     Vector3d Xprev = triangulate(xn1, xn2, Rrel, trel);  // in prev-camera frame
     if (Xprev.z() <= 0 || !Xprev.allFinite()) continue;
+
+    // --- Triangulation quality gates (pan-clip fix, see
+    // docs/bench/pan-map-poisoning.md). ---
+    // (a) Cheirality in the CURRENT view too (was only checked in prev).
+    Vector3d Xcur = Rrel * Xprev + trel;
+    if (Xcur.z() <= 0) continue;
+    // (b) Reprojection error in BOTH views — hard reject (bad matches).
+    const double e1u = K_.fx * Xprev.x() / Xprev.z() + K_.cx - a.x();
+    const double e1v = K_.fy * Xprev.y() / Xprev.z() + K_.cy - a.y();
+    const double e2u = K_.fx * Xcur.x() / Xcur.z() + K_.cx - b.x();
+    const double e2v = K_.fy * Xcur.y() / Xcur.z() + K_.cy - b.y();
+    const double err2 = triMaxReprojErrPx * triMaxReprojErrPx;
+    if (e1u * e1u + e1v * e1v > err2 || e2u * e2u + e2v * e2v > err2) continue;
+    // (c) Parallax: below the minimum ray angle the depth is unobservable —
+    //     keep the point as a 2D tracking scaffold but mark it provisional
+    //     (!solid) so the capacity cull can't let it evict real geometry.
+    //     A HARD gate here kills pan tracking entirely (verified on the pan
+    //     clip: lost 162 -> 669); the scaffold is what keeps PnP alive
+    //     through a rotation.
+    Vector3d ray1 = Xprev.normalized();                      // from prev center
+    Vector3d ray2 = (Xprev + Rrel.transpose() * trel).normalized();  // from cur center (in prev frame)
+    const bool solid = ray1.dot(ray2) < cosMinParallax;
+
     Vector3d Xworld = prev.R.transpose() * (Xprev - prev.t);
 
     MapPoint mp;
+    mp.solid = solid;
     mp.X = Xworld;
     mp.desc = f.desc[m.b]; mp.desc2 = mp.desc;
     mp.observations = 2;
@@ -474,25 +500,38 @@ void SlamMap::insertKeyframe(const OrbFeatures& f, const std::vector<DMatch>& ma
 // drop the rest, compacting the points vector and remapping keyframe indices.
 // This lets the camera explore new areas (new points keep getting added) while
 // the total stays bounded — old, no-longer-seen regions fall out of the map.
+// Solid (well-triangulated) points get a recency bonus so a flood of
+// provisional low-parallax scaffold points from a pan can't evict them.
 void SlamMap::cullMapPoints() {
   const int n = (int)points_.size();
   if (n <= maxMapPoints) return;
 
-  // Find the lastSeen cutoff that keeps the maxMapPoints most-recent points.
-  std::vector<int> seen(n);
-  for (int i = 0; i < n; ++i) seen[i] = points_[i].lastSeen;
-  std::nth_element(seen.begin(), seen.begin() + (n - maxMapPoints), seen.end());
-  const int cutoff = seen[n - maxMapPoints];
+  // Keep-priority (higher = keep):
+  //  1. the current working set (seen within cullRecentProtectFrames) outranks
+  //     everything — solid or not, tracking is standing on these points;
+  //  2. among the rest, recency with a solid bonus: well-triangulated points
+  //     age cullSolidBonusFrames slower than provisional low-parallax scaffold,
+  //     so a pan's scaffold flood can't evict real geometry.
+  // Within each tier, recency (+ bonus) breaks ties — so even if the protected
+  // set alone exceeds the budget, the most recent points win, and exploration
+  // with a tiny budget still keeps the frontier (see test_explore).
+  auto key = [&](const MapPoint& p) -> long long {
+    long long k = (long long)p.lastSeen + (p.solid ? cullSolidBonusFrames : 0);
+    if (frameCounter_ - p.lastSeen <= cullRecentProtectFrames) k += 1LL << 32;
+    return k;
+  };
+  std::vector<int> order(n);
+  for (int i = 0; i < n; ++i) order[i] = i;
+  std::stable_sort(order.begin(), order.end(),
+                   [&](int a, int b) { return key(points_[a]) > key(points_[b]); });
 
-  // Keep points with lastSeen > cutoff; for ties at the cutoff, keep until full.
   std::vector<int> remap(n, -1);
   std::vector<MapPoint> kept;
   kept.reserve(maxMapPoints);
-  for (int i = 0; i < n && (int)kept.size() < maxMapPoints; ++i) {
-    if (points_[i].lastSeen > cutoff) { remap[i] = (int)kept.size(); kept.push_back(points_[i]); }
-  }
-  for (int i = 0; i < n && (int)kept.size() < maxMapPoints; ++i) {
-    if (points_[i].lastSeen == cutoff && remap[i] == -1) { remap[i] = (int)kept.size(); kept.push_back(points_[i]); }
+  for (int j = 0; j < maxMapPoints; ++j) {
+    const int i = order[j];
+    remap[i] = (int)kept.size();
+    kept.push_back(points_[i]);
   }
   points_ = std::move(kept);
 

@@ -944,3 +944,25 @@ measured replay.
 
 Next for this scene: KF-pose-seeded reloc (geometry disambiguates repetitive
 texture), reloc ratio 0.95→0.8, skip triangulation while tracking is weak.
+
+---
+
+## Map self-poisoning fix — scaffold points + priority cull (2026-07-16)
+
+Third phone clip: tracking lost during a simple ~20°/s pan across a textured
+room. Diagnosis in `docs/bench/pan-map-poisoning.md`: near-pure rotation
+triangulates garbage depths (no baseline) that flood the map, hit the 2200 cap,
+and evict good geometry (the cull kept most-recently-seen = the garbage). The
+pan returns to a mapped area and finds nothing.
+
+A hard 1° parallax gate made it far WORSE (162→669 lost) — low-parallax points
+are a valid 2D tracking scaffold during rotation. Shipped instead:
+**reproj-error gate (3 px, both views) hard-rejects mismatches; low-parallax
+points enter as `!solid` scaffold; the capacity cull keeps working-set points
+unconditionally, then solid points with a 300-frame recency bonus.**
+
+Results: pan 162→**82** lost (all remaining in a motion-blurred backlit
+sweep), orbit **5→0** lost with orbit-region inliers **29→138** (the same
+poisoning was degrading it), sphere unchanged (27, needs seeded reloc next).
+All 16 native suites pass — cull rewritten as an explicit priority order so
+test_explore's tiny-budget frontier case still holds.
