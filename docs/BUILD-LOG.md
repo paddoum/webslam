@@ -966,3 +966,18 @@ sweep), orbit **5→0** lost with orbit-region inliers **29→138** (the same
 poisoning was degrading it), sphere unchanged (27, needs seeded reloc next).
 All 16 native suites pass — cull rewritten as an explicit priority order so
 test_explore's tiny-budget frontier case still holds.
+
+---
+
+## Map budget sweep — 2200 stays (2026-07-16)
+
+Asked whether `maxMapPoints` should exceed 2200. Added `setMaxMapPoints`
+(Embind + `?mapPts=` URL param, survives `enableMapping()` resets) and swept
+2200/3500/5000 across the three clips. Full table in
+`docs/bench/map-budget-sweep.md`. Headline: **non-monotonic and
+scene-dependent** — pan improves 82→38 lost at 3500 (richer retained
+coverage), but the orbit clip goes 0→151 lost (permanently lost) because the
+cap's forced cull was silently flushing stale repetitive-floor points that
+otherwise poison projection matching. 5000 collapses even the pan clip
+(reloc ~230 ms/attempt, ambiguity up). **Default stays 2200**; the override
+remains for tuning. Real headroom = smarter association, not a bigger map.

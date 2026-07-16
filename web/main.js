@@ -241,6 +241,10 @@ async function main() {
   Module = await createSlamModule();
   engine = new Module.SlamEngine(PROC_W, PROC_H, MAX_FEATURES);
   engine.setIntrinsics(FX, FY, CX, CY);
+  // Optional map-point budget override (?mapPts=N, default 2200 in map.h).
+  // Set BEFORE enableMapping — the engine remembers it across map resets.
+  const mapPts = parseInt(new URLSearchParams(location.search).get('mapPts') || '0', 10);
+  if (mapPts > 0) engine.setMaxMapPoints(mapPts);
   engine.enableMapping();   // M3
   startMs = performance.now();
   el('status').textContent = 'WASM ready · synthetic scene (scale self-test running). Use camera + enable motion on a phone.';

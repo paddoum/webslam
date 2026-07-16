@@ -52,6 +52,12 @@ class SlamEngine {
   // Call before processFrame, only when the gyro->camera alignment is calibrated.
   void setGyroDelta(double wx, double wy, double wz, double dt);
 
+  // Override the sliding-window map point budget (default 2200 in map.h).
+  // Runtime-tunable for experiments (?mapPts= URL param) — tracking cost is
+  // O(N)/frame and global reloc O(N·features)/attempt, so measure before
+  // shipping a bigger default. Clamped to >= 500.
+  void setMaxMapPoints(int n);
+
   // Detect corners (+ track, if intrinsics set) on the staged frame.
   // Returns the number of keypoints found.
   int processFrame(int width, int height, int threshold);
@@ -133,6 +139,7 @@ class SlamEngine {
   int max_width_;
   int max_height_;
   int max_features_;
+  int max_map_points_override_ = 0;  // 0 = use map.h default; re-applied on enableMapping()
 
   std::vector<std::uint8_t> input_rgba_;  // staged frame (RGBA)
   std::vector<std::uint8_t> gray_;        // grayscale working buffer

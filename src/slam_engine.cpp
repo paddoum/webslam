@@ -193,6 +193,14 @@ void SlamEngine::setIntrinsics(double fx, double fy, double cx, double cy) {
 void SlamEngine::enableMapping() {
   Intrinsics K{fx_, fy_, cx_, cy_};
   map_ = std::make_unique<SlamMap>(K);
+  // Re-apply the budget override — enableMapping() recreates the map (replay
+  // calls it to reset), which would otherwise silently revert to the default.
+  if (max_map_points_override_ > 0) map_->maxMapPoints = max_map_points_override_;
+}
+
+void SlamEngine::setMaxMapPoints(int n) {
+  max_map_points_override_ = std::max(500, n);
+  if (map_) map_->maxMapPoints = max_map_points_override_;
 }
 
 void SlamEngine::setMotionHint(double px) { if (map_) map_->setSearchHint(px); }

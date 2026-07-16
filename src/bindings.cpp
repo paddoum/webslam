@@ -87,6 +87,7 @@ EMSCRIPTEN_BINDINGS(webslam_module) {
       .function("translationDir", &translationDirView)
       .function("accumulatedRotation", &accumulatedRotationView)
       .function("enableMapping", &SlamEngine::enableMapping)
+      .function("setMaxMapPoints", &SlamEngine::setMaxMapPoints)
       .function("depthView", &depthView)
       .function("densifyFromDepth", &SlamEngine::densifyFromDepth)
       .function("setMotionHint", &SlamEngine::setMotionHint)
