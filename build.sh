@@ -25,7 +25,11 @@ emcmake cmake -S "$ROOT" -B "$BUILD_DIR" \
 
 cmake --build "$BUILD_DIR"
 
-# Stamp the build date/time so the web header can show the running version.
-printf 'export const BUILD = "%s";\n' "$(date '+%Y-%m-%d %H:%M')" > "$ROOT/web/version.js"
+# Stamp the build date/time + git hash so the web header identifies the running
+# version. NOTE: version.js only updates when this script runs — for JS-only
+# changes, run ./build.sh before committing so the deployed header reflects them.
+GITREV="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo 'nogit')"
+if ! git -C "$ROOT" diff --quiet 2>/dev/null; then GITREV="${GITREV}+"; fi
+printf 'export const BUILD = "%s · %s";\n' "$(date '+%Y-%m-%d %H:%M')" "$GITREV" > "$ROOT/web/version.js"
 
 echo "✓ built -> web/wasm/slam.js + slam.wasm  (build $(cat "$ROOT/web/version.js" | sed 's/.*"\(.*\)".*/\1/'))"
