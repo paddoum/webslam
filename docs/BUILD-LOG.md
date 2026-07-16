@@ -1017,3 +1017,21 @@ uncorrected placement depth forever (~3× off after BA settled).
 Remaining honest gap: placement snapping picks the nearest projected map
 point regardless of maturity — on-device, depth-based placement (ZipDepth
 gate) mostly bypasses this. Phone test will give the real verdict.
+
+---
+
+## Reloc fix: KF quality floor + keyframe-pose-seeded reloc (2026-07-16)
+
+New clip: "better tracking but hard time relocating" — lost at f289, never
+recovered for 33 s despite the user looking straight at mapped areas. Two
+compounding causes (docs/bench/seeded-reloc.md): the weak-tracking KF trigger
+had inserted 11 unreliable-pose KFs during the preceding degradation window
+(corrupting the recent map — verified: seeded reloc alone recovered nothing),
+and appearance-only reloc can't disambiguate the striped rug.
+
+Shipped: `kfInsertMinInliers=20` floor (never extend the map from an
+unreliable pose) + `relocalizeByKeyframes` (3 gyro-ranked KF-pose seeds per
+lost frame through the shared `trackFromPose`; appearance reloc stays as the
+throttled fallback). Results: reloc clip now recovers repeatedly and ends
+tracking (301 inliers); pan 82→13 lost; orbit unchanged (0); sphere 27→25.
+All native suites pass.

@@ -112,6 +112,10 @@ bool SlamMap::process(const OrbFeatures& f) {
   // global relocalization, which stays as the last resort.
   bool ok = false;
   if (state_ == State::kTracking || state_ == State::kLost) ok = trackByProjection(f);
+  // While lost: geometry-seeded reloc from keyframe poses, every frame (cheap,
+  // and it's what recovers on repetitive scenes where appearance matching
+  // can't — see docs/bench). Runs before the expensive appearance fallback.
+  if (!ok && state_ == State::kLost) ok = relocalizeByKeyframes(f);
   if (!ok) {
     // Budgeted global reloc (see relocCooldownFrames in map.h): immediate on the
     // first lost frame, throttled afterwards so lost frames stay cheap and the
@@ -261,18 +265,31 @@ bool SlamMap::trackByProjection(const OrbFeatures& f) {
   const double expectedMotion = std::max(predMotion, searchHint_);
   const double R = std::min(trackMaxSearchPx, trackSearchRadiusPx + 1.3 * expectedMotion);
 
+  return trackFromPose(f, predR, predt, R, /*minInliers=*/6, /*fromMotion=*/true);
+}
+
+// Projection tracking from an explicit pose guess: match map points projected
+// with (R0,t0) to nearby detected corners, then guess-seeded PnP. Shared by
+// normal tracking (motion-model pose, minInliers=6) and keyframe-seeded
+// relocalization (KF pose, minInliers=relocMinInliers).
+bool SlamMap::trackFromPose(const OrbFeatures& f, const Matrix3d& R0,
+                            const Vector3d& t0, double R, int minInliers,
+                            bool fromMotion) {
+  const int nf = (int)f.size();
+  if (points_.empty() || nf < trackMinMatches) return false;
+
   // Spatial hash of detected features (cell = search radius).
   std::unordered_map<long long, std::vector<int>> grid;
   auto key = [&](int cx, int cy) { return (long long)cy * 100000LL + cx; };
   for (int j = 0; j < nf; ++j)
     grid[key((int)std::floor(f.x[j] / R), (int)std::floor(f.y[j] / R))].push_back(j);
 
-  // For each map point, project with the predicted pose and match to the best
+  // For each map point, project with the guess pose and match to the best
   // nearby detected corner by descriptor distance.
   std::vector<DMatch> mm;
   std::vector<char> used(nf, 0);
   for (int i = 0; i < (int)points_.size(); ++i) {
-    Vector3d Xc = predR * points_[i].X + predt;
+    Vector3d Xc = R0 * points_[i].X + t0;
     if (Xc.z() <= 0.1) continue;
     const double u = K_.fx * Xc.x() / Xc.z() + K_.cx;
     const double v = K_.fy * Xc.y() / Xc.z() + K_.cy;
@@ -292,16 +309,16 @@ bool SlamMap::trackByProjection(const OrbFeatures& f) {
       }
     if (bestJ >= 0 && !used[bestJ]) { mm.push_back({i, bestJ, best}); used[bestJ] = 1; }
   }
-  if ((int)mm.size() < trackMinMatches) return false;
+  if ((int)mm.size() < std::max(trackMinMatches, minInliers)) return false;
 
   std::vector<Vector3d> wp; std::vector<Vector2d> uv;
   wp.reserve(mm.size()); uv.reserve(mm.size());
   for (const auto& m : mm) { wp.push_back(points_[m.a].X); uv.push_back(Vector2d(f.x[m.b], f.y[m.b])); }
   PnPResult r = solvePnP(wp, uv, K_, /*pixelThreshold=*/3.0, /*iters=*/60, /*seed=*/9973,
-                         /*hasGuess=*/true, predR, predt);
-  if (!r.ok || r.inliers < 6) return false;
+                         /*hasGuess=*/true, R0, t0);
+  if (!r.ok || r.inliers < minInliers) return false;
 
-  acceptPose(r.R, r.t, /*fromMotion=*/true);
+  acceptPose(r.R, r.t, fromMotion);
   last_inliers_ = r.inliers;
   lastMapMatches_.clear();
   for (size_t k = 0; k < mm.size(); ++k) {
@@ -314,6 +331,42 @@ bool SlamMap::trackByProjection(const OrbFeatures& f) {
     }
   }
   return true;
+}
+
+// Keyframe-pose-seeded relocalization: hypothesize "I'm near where keyframe k
+// stood" and run projection tracking from k's pose with a wide window.
+// Geometry constrains the matching, which disambiguates repetitive texture
+// (striped rug, wood planks) where appearance-only matching drowns in false
+// candidates. Seeds are ranked by viewing-direction alignment with the
+// gyro-coasted heading (the gyro keeps curR_ current while lost); the best
+// seed is always tried, remaining tries round-robin through the ranked list
+// so the whole KF bank gets covered across consecutive lost frames.
+bool SlamMap::relocalizeByKeyframes(const OrbFeatures& f) {
+  const int nk = (int)keyframes_.size();
+  if (nk == 0) return false;
+
+  const Vector3d curDir(curR_(2, 0), curR_(2, 1), curR_(2, 2));
+  std::vector<std::pair<double, int>> ranked;  // (-alignment, kf index)
+  ranked.reserve(nk);
+  for (int i = 0; i < nk; ++i) {
+    const Keyframe& kf = keyframes_[i];
+    const Vector3d d(kf.R(2, 0), kf.R(2, 1), kf.R(2, 2));
+    ranked.push_back({-curDir.dot(d), i});
+  }
+  std::sort(ranked.begin(), ranked.end());
+
+  const int tries = std::min(relocSeedsPerFrame, nk);
+  for (int k = 0; k < tries; ++k) {
+    // Seed 0: most aligned with the coasted heading. Others: round-robin.
+    const int r = (k == 0) ? 0 : (1 + (relocSeedCursor_ + k - 1) % std::max(1, nk - 1));
+    const Keyframe& kf = keyframes_[ranked[r].second];
+    if (trackFromPose(f, kf.R, kf.t, relocSeedSearchPx, relocMinInliers, /*fromMotion=*/false)) {
+      relocSeedCursor_ = 0;
+      return true;
+    }
+  }
+  relocSeedCursor_ = (relocSeedCursor_ + std::max(0, tries - 1)) % std::max(1, nk - 1);
+  return false;
 }
 
 bool SlamMap::relocalizeGlobal(const OrbFeatures& f) {
@@ -350,6 +403,11 @@ bool SlamMap::relocalizeGlobal(const OrbFeatures& f) {
 // what stops keyframe/point bloat when the phone is held roughly still.
 bool SlamMap::shouldInsertKeyframe() const {
   if (framesSinceKf_ < kfMinFrames) return false;          // avoid bursts
+  // Quality floor: below this the pose itself is unreliable — inserting a KF
+  // would stamp a bad pose into the bank and triangulate garbage (seen on the
+  // reloc clip: 11 KFs inserted at 8-20 inliers during a degradation window
+  // corrupted the recent map so thoroughly no relocalizer could match it).
+  if (last_inliers_ < kfInsertMinInliers) return false;
   if (last_inliers_ < kfMinTrackInliers) return true;      // weak tracking
   if (framesSinceKf_ >= kfMaxFrames) return true;          // periodic refresh while moving
   const Keyframe& kf = keyframes_.back();

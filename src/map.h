@@ -115,6 +115,8 @@ class SlamMap {
   int kfMinFrames = 5;               // minimum frames between keyframes
   int kfMaxFrames = 20;              // force a keyframe at least this often while moving
   int kfMinTrackInliers = 25;        // weak tracking -> insert a keyframe
+  int kfInsertMinInliers = 20;       // ...but NEVER insert below this (pose unreliable;
+                                     // a bad-pose KF poisons the bank + triangulates garbage)
   double kfMinTranslation = 0.12;    // visual units (init baseline = 1) to warrant a KF
   double kfMinRotationDeg = 4.0;
   int maxKeyframes = 80;             // cap; culled by diversity policy (see cullKeyframes)
@@ -129,6 +131,14 @@ class SlamMap {
   // relocCooldownFrames while lost; skipped frames still run the cheap
   // gyro-coasted projection re-acquire.
   int relocCooldownFrames = 4;
+  // Keyframe-pose-seeded relocalization: while lost, try projection tracking
+  // FROM stored keyframe poses (a few per frame, ranked by viewing-direction
+  // alignment with the gyro-coasted heading, round-robin through the rest).
+  // Geometry disambiguates repetitive texture (striped rug, wood planks) where
+  // the appearance-only brute-force match structurally cannot reach the inlier
+  // floor. Far cheaper than global reloc (~3-8 ms/seed vs ~100 ms).
+  int relocSeedsPerFrame = 3;        // KF pose hypotheses tried per lost frame
+  double relocSeedSearchPx = 70;     // match window around projections from a seed pose
   // Track-by-projection (robust to viewpoint change while tracking).
   double trackSearchRadiusPx = 36;   // base search window around a predicted projection
   double trackMaxSearchPx = 150;     // adaptive cap for fast motion
@@ -151,6 +161,13 @@ class SlamMap {
  private:
   bool tryInitialize(const OrbFeatures& f);
   bool trackByProjection(const OrbFeatures& f);   // motion-model + local search
+  // Core of projection tracking: match map points projected from an explicit
+  // pose guess, then guess-seeded PnP. minInliers gates acceptance (tracking
+  // uses 6; reloc seeds use relocMinInliers to avoid false relocalization).
+  bool trackFromPose(const OrbFeatures& f, const Eigen::Matrix3d& R0,
+                     const Eigen::Vector3d& t0, double radius, int minInliers,
+                     bool fromMotion);
+  bool relocalizeByKeyframes(const OrbFeatures& f); // geometry-seeded (see relocSeedsPerFrame)
   bool relocalizeGlobal(const OrbFeatures& f);    // global descriptor match, no prior
   void predictPose(Eigen::Matrix3d& R, Eigen::Vector3d& t) const;
   void acceptPose(const Eigen::Matrix3d& R, const Eigen::Vector3d& t, bool fromMotion);
@@ -182,6 +199,7 @@ class SlamMap {
   std::vector<DMatch> lastMapMatches_;  // map-point -> feature, for KF insertion
   int frameCounter_ = 0;                // monotonic frame index (for lastSeen)
   int framesSinceReloc_ = 0;            // lost-frames since the last global-reloc attempt
+  int relocSeedCursor_ = 0;             // round-robin position in the ranked KF seed list
 
   // AR anchor state (see setAnchor).
   void refreshAnchor();                 // re-derive anchor from its points' current positions
