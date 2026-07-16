@@ -885,3 +885,36 @@ future clips should watch lost/inlier counts, not only timing.
 
 Cumulative (M14 baseline → Phase 5): total p95 29.5→23.4 ms (-21%), max 61.8→47 ms
 (-24%). Remaining tail is main-thread KF-insert BA → Phase 4 (off-thread), not BA cuts.
+
+---
+
+## M9.4 — ZipDepth: 37× faster depth backend (2026-07-16)
+
+Swapped the depth network. **ZipDepth-base NPU** (github.com/fabiotosi92/ZipDepth,
+MIT, 6.1M params) exported to ONNX at 192×256 (exactly 4:3 — matches the proc frame
+with no letterboxing), converted to **fp16 (12.3 MB, corr 0.99993 vs fp32 — lossless)**,
+served locally from `web/models/`, and run in the depth worker via **onnxruntime-web**
+(WASM SIMD, single-thread). Int8 was rejected: corr 0.61 vs fp32 (broken) and slower.
+
+`depth-worker.js` now hosts both backends behind the same message contract;
+`?depth=da2` keeps Depth-Anything-V2-small as the A/B fallback. ZipDepth is default.
+Send cadence raised 450→100 ms for the fast backend; worker now reports per-inference
+latency (shown in the depth-align readout).
+
+**Measured, same machine, same replay protocol on the orbit clip:**
+ZipDepth **160 ms/inference (104 depth frames during replay)** vs DA2 **5945 ms
+(2 frames)** — ~37×. Native CPU reference: 12.6 ms, so browser WASM leaves ~10×
+on the table (threads need COOP/COEP — GH Pages can't set headers; WebGPU EP is the
+likelier future win). Depth cadence goes ~0.2 Hz → **~6 Hz** in-browser.
+
+**Quality:** on the grayscale orbit clip both models fail the alignment gate equally
+(|spearman|~0.1) — that scene is hard for monocular depth, not a ZipDepth regression.
+Offline validation: structured output on real imagery (blur-variance ratio 0.82) and
+**0.99 color↔grayscale correlation** (robust to our gray recordings). ZipDepth output
+flowed through the full M9.2/M9.3 path and densified +217 map points when the gate
+passed. **Live color camera test on-device still pending** — that's the real quality
+verdict; if it underperforms DA2 there, `?depth=da2` is one URL param away.
+
+Also fixed: unpaced bench replay ran as one macrotask, starving worker messages
+(only 1 depth result per replay). Bench mode now yields per frame via MessageChannel
+(timer clamping doesn't apply), so async depth flows during replays.

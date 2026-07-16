@@ -33,6 +33,11 @@ const STATE = ['init', 'tracking', 'lost'];
 // M9.1 — monocular depth (async, in a Web Worker).
 let depthOn = false, depthWorker = null, depthReady = false, depthBusy = false;
 let lastDepthSent = 0, latestDepth = null, depthDirty = false;
+// M9.4: depth backend — 'zip' (ZipDepth ONNX, ~10 Hz) default; '?depth=da2' for
+// the old Depth-Anything-V2-small (2 Hz) as an A/B fallback.
+const DEPTH_MODEL = new URLSearchParams(location.search).get('depth') || 'zip';
+const DEPTH_INTERVAL_MS = DEPTH_MODEL === 'zip' ? 100 : 450;  // send cadence per backend
+let depthInferMs = 0;          // latest model inference latency (reported by worker)
 let depthSendPose = null;      // pose snapshot at the instant a frame is sent to the worker
 let depthAlign = null;         // {a,b,n,r}: invDepth ≈ a·(net/255) + b  (M9.2)
 let lastDensified = 0;         // points added by the last depth densification (M9.3)
@@ -260,10 +265,10 @@ function drawCameraCropped() {
 function ensureDepthWorker() {
   if (depthWorker) return;
   try {
-    depthWorker = new Worker('./depth-worker.js', { type: 'module' });
+    depthWorker = new Worker('./depth-worker.js?model=' + DEPTH_MODEL, { type: 'module' });
     depthWorker.onmessage = (e) => {
       const m = e.data;
-      if (m.type === 'ready') { depthReady = true; el('status').textContent = 'depth model ready'; }
+      if (m.type === 'ready') { depthReady = true; el('status').textContent = `depth model ready (${m.model || DEPTH_MODEL})`; }
       else if (m.type === 'progress') {
         const p = m.data;
         if (p && p.status === 'progress' && p.progress != null)
@@ -271,11 +276,13 @@ function ensureDepthWorker() {
         else if (p && p.status && p.status !== 'progress')
           el('status').textContent = 'depth model: ' + p.status;
       }
-      else if (m.type === 'depth') { latestDepth = { w: m.width, h: m.height, c: m.channels || 1, data: new Uint8Array(m.data), pose: depthSendPose }; depthBusy = false; depthDirty = true; }
+      else if (m.type === 'depth') { latestDepth = { w: m.width, h: m.height, c: m.channels || 1, data: new Uint8Array(m.data), pose: depthSendPose }; depthInferMs = m.inferMs || 0; depthBusy = false; depthDirty = true; }
       else if (m.type === 'error') { el('status').textContent = 'depth: ' + m.message; depthOn = false; el('depthBtn').textContent = 'depth: off'; }
     };
     depthWorker.onerror = (e) => { el('status').textContent = 'depth worker error'; depthOn = false; el('depthBtn').textContent = 'depth: off'; };
-    el('status').textContent = 'loading depth model… (first time downloads ~25 MB)';
+    el('status').textContent = DEPTH_MODEL === 'zip'
+      ? 'loading ZipDepth… (12 MB, served locally)'
+      : 'loading depth model… (first time downloads ~25 MB)';
     // Watchdog: if it never reports ready, say so instead of spinning forever.
     setTimeout(() => {
       if (depthOn && !depthReady)
@@ -551,7 +558,7 @@ function step() {
   drawTrajectory(engine.trajectory());
 
   // --- M9.1: depth (async ~2 Hz in a worker) ---
-  if (depthOn && depthReady && !depthBusy && (performance.now() - lastDepthSent) > 450) {
+  if (depthOn && depthReady && !depthBusy && (performance.now() - lastDepthSent) > DEPTH_INTERVAL_MS) {
     const di = pctx.getImageData(0, 0, PROC_W, PROC_H);  // fresh RGBA for the model
     // Snapshot the pose NOW so the (async, ~2 s later) depth map is aligned with
     // the viewpoint it was actually captured from — not a moved pose.
@@ -625,7 +632,7 @@ function step() {
     else if (!latestDepth) s = 'no depth yet';
     else if (depthAlign) {
       // raw r | robust r | Spearman rank corr — the three together diagnose it
-      s = `sp=${depthAlign.spearman.toFixed(2)} rob=${depthAlign.rRobust.toFixed(2)} +${lastDensified}pts`;
+      s = `sp=${depthAlign.spearman.toFixed(2)} rob=${depthAlign.rRobust.toFixed(2)} +${lastDensified}pts ${depthInferMs.toFixed(0)}ms`;
     }
     else if (!latestDepth.pose) s = 'need tracking';
     else s = 'too few pts';
@@ -1004,6 +1011,11 @@ async function loadAndReplay(file) {
       lastFrameEvTMs = ev.tMs;
       pctx.drawImage(ev.bitmap, 0, 0);
       step();
+      // In unpaced bench mode the loop would otherwise be one long macrotask,
+      // starving worker messages (the depth results). Yield via MessageChannel
+      // (not setTimeout — timers are clamped in hidden tabs) so async depth can
+      // flow during a bench replay. Per-frame stage times are unaffected.
+      if (BENCH) await new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); });
     }
   }
 
