@@ -203,6 +203,14 @@ void SlamEngine::setMaxMapPoints(int n) {
   if (map_) map_->maxMapPoints = max_map_points_override_;
 }
 
+void SlamEngine::setAnchor(double x, double y, double z) {
+  if (map_) map_->setAnchor(Eigen::Vector3d(x, y, z));
+}
+bool SlamEngine::anchorValid() const { return map_ && map_->anchorValid(); }
+double SlamEngine::anchorX() const { return map_ ? map_->anchorWorld().x() : 0; }
+double SlamEngine::anchorY() const { return map_ ? map_->anchorWorld().y() : 0; }
+double SlamEngine::anchorZ() const { return map_ ? map_->anchorWorld().z() : 0; }
+
 void SlamEngine::setMotionHint(double px) { if (map_) map_->setSearchHint(px); }
 
 void SlamEngine::setGyroDelta(double wx, double wy, double wz, double dt) {

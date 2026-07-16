@@ -77,6 +77,20 @@ class SlamMap {
   // PnP-inlier matches of the latest tracked frame (map point -> feature).
   // These are points V
 
+  // --- AR anchor: attach a world point to nearby map geometry. ---
+  // A raw world coordinate drifts relative to the physical scene because BA /
+  // VI optimization keep correcting the map (and monocular scale drifts) —
+  // the points ride those corrections, a frozen coordinate doesn't. Attaching
+  // stores the K nearest map points + the offset from their centroid; every
+  // frame the anchor is re-derived from their CURRENT positions (offset
+  // rescaled by the neighbourhood's spread to follow scale corrections), so
+  // the anchor moves with the scene. Anchor points are exempt from the
+  // capacity cull; if they drop below 3 (e.g. map reset), the last derived
+  // position is held frozen.
+  void setAnchor(const Eigen::Vector3d& Xw);
+  bool anchorValid() const { return anchorValid_; }
+  const Eigen::Vector3d& anchorWorld() const { return anchorWorld_; }
+
   // Tunables (sensible defaults; exposed for experiments/tests).
   int initMinInliers = 40;
   double initMinParallaxPx = 3.0;
@@ -168,6 +182,14 @@ class SlamMap {
   std::vector<DMatch> lastMapMatches_;  // map-point -> feature, for KF insertion
   int frameCounter_ = 0;                // monotonic frame index (for lastSeen)
   int framesSinceReloc_ = 0;            // lost-frames since the last global-reloc attempt
+
+  // AR anchor state (see setAnchor).
+  void refreshAnchor();                 // re-derive anchor from its points' current positions
+  bool anchorValid_ = false;
+  Eigen::Vector3d anchorWorld_ = Eigen::Vector3d::Zero();  // last derived position
+  std::vector<int> anchorPts_;          // indices into points_ (remapped by cullMapPoints)
+  Eigen::Vector3d anchorOffset_ = Eigen::Vector3d::Zero(); // anchor - centroid at attach
+  double anchorSpread0_ = 0;            // neighbourhood spread at attach (scale reference)
 
   std::vector<Eigen::Vector3d> trajectory_;
 };

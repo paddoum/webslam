@@ -143,7 +143,57 @@ bool SlamMap::process(const OrbFeatures& f) {
     framesSinceKf_ = 0;
   }
   haveGyro_ = false;  // consume the prior; main thread sets a fresh one each frame
+  refreshAnchor();    // ride BA / VI / scale corrections applied this frame
   return true;
+}
+
+// Attach the AR anchor to the K nearest RELIABLE map points (see map.h for
+// why a raw world coordinate is not enough). Only solid (real-parallax) and
+// repeatedly-observed points qualify: provisional scaffold points have
+// unobservable depth that BA later yanks around — attaching to those makes
+// the anchor ride the garbage instead of the scene.
+void SlamMap::setAnchor(const Eigen::Vector3d& Xw) {
+  constexpr int kNeighbors = 8;
+  anchorPts_.clear();
+  auto gather = [&](auto&& qualifies) {
+    std::vector<std::pair<double, int>> byDist;
+    for (int i = 0; i < (int)points_.size(); ++i)
+      if (qualifies(points_[i])) byDist.push_back({(points_[i].X - Xw).squaredNorm(), i});
+    return byDist;
+  };
+  auto byDist = gather([](const MapPoint& p) { return p.solid && p.observations >= 3; });
+  if ((int)byDist.size() < 3) byDist = gather([](const MapPoint& p) { return p.solid; });
+  if ((int)byDist.size() < 3) byDist = gather([](const MapPoint&) { return true; });
+  if ((int)byDist.size() >= 3) {
+    const int k = std::min(kNeighbors, (int)byDist.size());
+    std::partial_sort(byDist.begin(), byDist.begin() + k, byDist.end());
+    Eigen::Vector3d c = Eigen::Vector3d::Zero();
+    for (int j = 0; j < k; ++j) { anchorPts_.push_back(byDist[j].second); c += points_[byDist[j].second].X; }
+    c /= k;
+    anchorOffset_ = Xw - c;
+    double spread = 0;
+    for (int j = 0; j < k; ++j) spread += (points_[anchorPts_[j]].X - c).norm();
+    anchorSpread0_ = spread / k;
+  }
+  anchorWorld_ = Xw;
+  anchorValid_ = true;
+}
+
+// Re-derive the anchor from its attached points' CURRENT positions: centroid +
+// the stored offset, rescaled by the neighbourhood spread so global scale
+// corrections (monocular drift, VI rescale) carry the anchor too. Falls back
+// to the last derived position when too few attached points survive.
+void SlamMap::refreshAnchor() {
+  if (!anchorValid_ || (int)anchorPts_.size() < 3) return;
+  Eigen::Vector3d c = Eigen::Vector3d::Zero();
+  for (int i : anchorPts_) c += points_[i].X;
+  c /= (double)anchorPts_.size();
+  double spread = 0;
+  for (int i : anchorPts_) spread += (points_[i].X - c).norm();
+  spread /= (double)anchorPts_.size();
+  double s = (anchorSpread0_ > 1e-9) ? spread / anchorSpread0_ : 1.0;
+  s = std::max(0.5, std::min(2.0, s));  // clamp: spread of 8 points is a noisy scale probe
+  anchorWorld_ = c + s * anchorOffset_;
 }
 
 void SlamMap::setGyroDelta(const Vector3d& camAngVel, double dt) {
@@ -515,15 +565,20 @@ void SlamMap::cullMapPoints() {
   // Within each tier, recency (+ bonus) breaks ties — so even if the protected
   // set alone exceeds the budget, the most recent points win, and exploration
   // with a tiny budget still keeps the frontier (see test_explore).
-  auto key = [&](const MapPoint& p) -> long long {
+  auto isAnchorPt = [&](int i) {
+    return std::find(anchorPts_.begin(), anchorPts_.end(), i) != anchorPts_.end();
+  };
+  auto key = [&](int i) -> long long {
+    const MapPoint& p = points_[i];
     long long k = (long long)p.lastSeen + (p.solid ? cullSolidBonusFrames : 0);
     if (frameCounter_ - p.lastSeen <= cullRecentProtectFrames) k += 1LL << 32;
+    if (isAnchorPt(i)) k += 2LL << 32;  // the AR anchor rides these — never cull
     return k;
   };
   std::vector<int> order(n);
   for (int i = 0; i < n; ++i) order[i] = i;
   std::stable_sort(order.begin(), order.end(),
-                   [&](int a, int b) { return key(points_[a]) > key(points_[b]); });
+                   [&](int a, int b) { return key(a) > key(b); });
 
   std::vector<int> remap(n, -1);
   std::vector<MapPoint> kept;
@@ -539,6 +594,15 @@ void SlamMap::cullMapPoints() {
   for (auto& kf : keyframes_)
     for (int& pi : kf.ptIndex)
       if (pi >= 0) pi = remap[pi];
+
+  // Remap the anchor's attached points (anchor-exempt above, so normally all
+  // survive; a shrunk budget could still drop some — refreshAnchor freezes the
+  // anchor if fewer than 3 remain).
+  if (anchorValid_) {
+    std::vector<int> keptAnchor;
+    for (int i : anchorPts_) if (remap[i] >= 0) keptAnchor.push_back(remap[i]);
+    anchorPts_ = std::move(keptAnchor);
+  }
 }
 
 // Refine the most recent keyframes and the points they observe with local

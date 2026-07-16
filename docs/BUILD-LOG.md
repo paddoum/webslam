@@ -981,3 +981,39 @@ cap's forced cull was silently flushing stale repetitive-floor points that
 otherwise poison projection matching. 5000 collapses even the pan clip
 (reloc ~230 ms/attempt, ambiguity up). **Default stays 2200**; the override
 remains for tuning. Real headroom = smarter association, not a bigger map.
+
+---
+
+## M15: AR-anchor UX — scan gate + geometry-attached anchor (2026-07-16)
+
+Aligned the app with the intended product flow: (1) scan until coverage is
+sufficient → app says place, (2) place the sphere, (3) it stays anchored while
+you move around.
+
+**Scan gate.** Placement now requires the coverage targets (30° yaw / 18°
+pitch) — the "place sphere" button is disabled until then, tap-to-place says
+"scan more first", and hitting the targets announces "scan complete — tap to
+place". Previously only tracking was required, so users placed spheres on
+2-keyframe maps that promptly fell apart.
+
+**Geometry-attached anchor (the real fix for "it drifts").** The anchor was a
+frozen world coordinate — but BA/VI keep correcting the map underneath it, so
+the sphere drifted relative to the scene. `SlamMap::setAnchor` now attaches
+the anchor to its 8 nearest RELIABLE map points (solid + ≥3 observations —
+attaching to provisional scaffold points made the anchor ride garbage depth
+corrections, verified: 70% depth wander) and re-derives its position every
+frame from their CURRENT positions (offset rescaled by neighbourhood spread to
+follow scale corrections). Anchor points are exempt from the capacity cull;
+<3 survivors freezes the last position. JS pulls `engine.anchorX/Y/Z()` each
+frame; `?anchor=fixed` keeps the old behaviour for A/B.
+
+**Validation (orbit clip, deterministic):** placed at f100, the attached
+anchor settles with its neighbourhood's BA corrections (~80 frames), then
+holds **<1% positional variation for 600 frames** through the orbit stress
+region (mapSpread confirms the gauge itself is stable). Orbit stays 0 lost.
+All 16 native suites pass. The frozen-coordinate anchor would have kept the
+uncorrected placement depth forever (~3× off after BA settled).
+
+Remaining honest gap: placement snapping picks the nearest projected map
+point regardless of maturity — on-device, depth-based placement (ZipDepth
+gate) mostly bypasses this. Phone test will give the real verdict.

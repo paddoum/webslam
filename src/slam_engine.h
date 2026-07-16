@@ -58,6 +58,14 @@ class SlamEngine {
   // shipping a bigger default. Clamped to >= 500.
   void setMaxMapPoints(int n);
 
+  // AR anchor: attach a world point to nearby map geometry so it rides BA /
+  // VI / scale corrections instead of drifting (see SlamMap::setAnchor).
+  void setAnchor(double x, double y, double z);
+  bool anchorValid() const;
+  double anchorX() const;
+  double anchorY() const;
+  double anchorZ() const;
+
   // Detect corners (+ track, if intrinsics set) on the staged frame.
   // Returns the number of keypoints found.
   int processFrame(int width, int height, int threshold);

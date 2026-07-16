@@ -58,6 +58,11 @@ let RciCalibrated = false;
 const gyroCal = { samples: 0, best: -1 };  // 24-candidate alignment accumulators
 let anchorWorld = null;        // 3D world point where the AR sphere is anchored
 let sphereRadiusWorld = 0.15;  // set at placement, scaled to the scene depth
+let scanReady = false;         // scan coverage targets met (gates placement)
+let scanAnnounced = false;     // "you can place now" said once per map
+// Debug A/B: ?anchor=fixed keeps the old frozen-world-coordinate anchor
+// instead of the geometry-attached engine anchor.
+const ANCHOR_FIXED = new URLSearchParams(location.search).get('anchor') === 'fixed';
 let accel = { has: false, x: 0, y: 0, z: 0 };
 let motionOn = false;
 let motionEvents = 0;          // count of devicemotion events received
@@ -133,6 +138,7 @@ function projectWorld(X, R, t) {
 // the tapped pixel; fall back to a ray at the median map depth if none is close.
 function placeAnchor(px, py) {
   if (!engine.mapTracked()) { el('status').textContent = 'wait for tracking before placing a sphere'; return; }
+  if (!scanReady) { el('status').textContent = 'scan more first — fill the coverage bar, then place'; return; }
   const R = engine.poseR(), t = engine.poseT();
   const mp = engine.mapPoints();
   let best = 1e9, bestXYZ = null;
@@ -186,6 +192,12 @@ function placeAnchor(px, py) {
     anchorWorld = [cx + md*wdx, cy + md*wdy, cz + md*wdz];
     setRadius(anchorWorld);
   }
+  // Attach to nearby map geometry (unless A/B'ing the old frozen coordinate):
+  // the engine re-derives the anchor from its neighbours' CURRENT positions
+  // every frame, so BA / VI / scale corrections carry the sphere with the
+  // scene instead of letting the world frame drift out from under it.
+  if (anchorWorld && !ANCHOR_FIXED) engine.setAnchor(anchorWorld[0], anchorWorld[1], anchorWorld[2]);
+  if (anchorWorld) el('status').textContent = 'sphere placed — move around, it stays put';
 }
 // Scale self-test signal: a fast, clearly oscillatory (zero-mean acceleration)
 // trajectory, decoupled from the slow SLAM camera. Returns position and its
@@ -543,8 +555,12 @@ function step() {
     }
   }
 
-  // AR sphere: anchored at a fixed 3D world point, ALWAYS drawn (with the fused
-  // pose) — so it stays put even when SLAM is lost and we're coasting on gyro.
+  // AR sphere: attached to nearby map geometry in the engine — pull its
+  // re-derived position each frame so BA / VI / scale corrections carry it
+  // with the scene. ALWAYS drawn (with the fused pose) so it stays put even
+  // when SLAM is lost and we're coasting on gyro.
+  if (anchorWorld && !ANCHOR_FIXED && engine.anchorValid())
+    anchorWorld = [engine.anchorX(), engine.anchorY(), engine.anchorZ()];
   if (anchorWorld && FR) {
     const p = projectWorld(anchorWorld, FR, FT);
     if (p.depth > 0.1 && p.u > -40 && p.v > -40 && p.u < PROC_W + 40 && p.v < PROC_H + 40) {
@@ -710,7 +726,17 @@ function step() {
   const yawFrac = Math.min(1, yawDeg / YAW_TARGET);
   const pitchFrac = Math.min(1, pitchDeg / PITCH_TARGET);
   const progress = (st === 0) ? 0 : 0.5 * yawFrac + 0.5 * pitchFrac;
-  const ready = st === 1 && yawFrac >= 1 && pitchFrac >= 1;
+  const covered = yawFrac >= 1 && pitchFrac >= 1;
+  const ready = st === 1 && covered;
+  // Coverage never shrinks within a map, so once covered the gate stays open
+  // (placement also requires tracking, checked in placeAnchor). Reset on new map.
+  if (st === 0) { scanReady = false; scanAnnounced = false; }
+  else if (covered) scanReady = true;
+  el('sphereBtn').disabled = !scanReady;
+  if (ready && !scanAnnounced && !anchorWorld) {
+    scanAnnounced = true;
+    el('status').textContent = 'scan complete — tap the view (or "place sphere") to drop the sphere';
+  }
   const pct = Math.round(progress * 100);
   el('scanPct').textContent = pct + '%';
   const bar = el('scanBar');
@@ -719,7 +745,8 @@ function step() {
   el('scanHint').textContent =
     st === 0 ? 'point at texture and slide sideways to start'
     : st === 2 ? 'lost — return to a mapped area to relocalize'
-    : ready ? `well covered — pan ${yawDeg.toFixed(0)}° tilt ${pitchDeg.toFixed(0)}°`
+    : ready ? (anchorWorld ? `well covered — pan ${yawDeg.toFixed(0)}° tilt ${pitchDeg.toFixed(0)}°`
+                           : 'ready — tap anywhere to place the sphere')
     : (yawFrac < pitchFrac) ? `keep panning left/right (${yawDeg.toFixed(0)}°/${YAW_TARGET}°)`
     : `keep tilting up/down (${pitchDeg.toFixed(0)}°/${PITCH_TARGET}°)`;
 
@@ -1080,6 +1107,9 @@ window.__replayUrl = async (url) => {
   return benchRows.length;
 };
 window.__anchor = () => anchorWorld;  // debug: read the anchored world point
+window.__mapStats = () => engine ? { spread: engine.mapSpread(), pts: engine.mapNumPoints(),
+  anchorValid: engine.anchorValid(), ax: engine.anchorX(), ay: engine.anchorY(), az: engine.anchorZ() } : null;
+window.__place = (px = PROC_W / 2, py = PROC_H / 2) => { scanReady = true; placeAnchor(px, py); return anchorWorld; };
 window.__sphereUV = () => {           // debug: current sphere projection
   if (!anchorWorld) return null;
   const p = projectWorld(anchorWorld, engine.poseR(), engine.poseT());
