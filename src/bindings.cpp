@@ -96,6 +96,7 @@ EMSCRIPTEN_BINDINGS(webslam_module) {
       .function("accumulatedRotation", &accumulatedRotationView)
       .function("enableMapping", &SlamEngine::enableMapping)
       .function("setMaxMapPoints", &SlamEngine::setMaxMapPoints)
+      .function("setHoldFrames", &SlamEngine::setHoldFrames)
       .function("setAnchor", &SlamEngine::setAnchor)
       .function("anchorValid", &SlamEngine::anchorValid)
       .function("anchorX", &SlamEngine::anchorX)

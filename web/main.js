@@ -263,6 +263,9 @@ async function main() {
   // Set BEFORE enableMapping — the engine remembers it across map resets.
   const mapPts = parseInt(new URLSearchParams(location.search).get('mapPts') || '0', 10);
   if (mapPts > 0) engine.setMaxMapPoints(mapPts);
+  // Coast-through hold window for A/B (?hold=N; 0 = pre-M15 drop-to-lost).
+  const holdParam = new URLSearchParams(location.search).get('hold');
+  if (holdParam !== null) engine.setHoldFrames(parseInt(holdParam, 10) || 0);
   engine.enableMapping();   // M3
   if (XFEAT_ON) ensureFeatWorker();  // learned-feature reloc channel
   startMs = performance.now();

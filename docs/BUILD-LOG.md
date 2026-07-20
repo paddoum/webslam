@@ -1058,3 +1058,21 @@ view unmapped scenery) that no relocalizer can solve. Per the plan's
 ship-or-shelve rule: **shelved.** Kept behind `?xfeat=1`, off by default, inert,
 zero regression (orbit 0 lost, 16/16 native suites pass). Real lever for these
 clips is map coverage, not descriptors.
+
+---
+
+## M15: coast-through hold — motion robustness (2026-07-16)
+
+The coverage lever turned out to be motion robustness, not retention
+(docs/bench/coverage-retention.md): failures are "tracking dropped in fast
+motion -> mapping stopped -> current view never covered." Fix: on a projection
+dropout, coast the pose on the motion model (const-vel translation + gyro
+rotation) for up to holdMaxFrames (=20) and keep retrying projection before
+declaring lost — NOT freezing translation (the old path's flaw). No KFs inserted
+while coasting; self-correcting into reloc if the hold expires.
+Runtime-tunable `?hold=N`.
+
+Deterministic A/B (hold=20 vs 0): new-clip 73->19 lost (-74%), reloc 841->421
+(-50%), sphere 25->8 (-68%), pan 13->10, orbit 0->0. Recovery genuine (reloc
+clip ends 162 inliers). All 16 native suites pass (test_reloc's forced-loss gap
+widened past the hold window). See docs/bench/coast-through-hold.md.

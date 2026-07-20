@@ -112,6 +112,29 @@ bool SlamMap::process(const OrbFeatures& f) {
   // global relocalization, which stays as the last resort.
   bool ok = false;
   if (state_ == State::kTracking || state_ == State::kLost) ok = trackByProjection(f);
+
+  // Coast through a brief tracking dropout (fast rotation, motion blur) BEFORE
+  // declaring lost / thrashing reloc: dead-reckon the pose on the motion model
+  // (constant-velocity translation + gyro rotation) for up to holdMaxFrames and
+  // keep re-attempting projection each frame. This keeps the pose and AR anchor
+  // coherent and re-acquires the instant sharp frames return — the key vs the
+  // hard-lost path is NOT freezing translation while the camera keeps moving
+  // (which strands the projection prior and delays recovery). No keyframes are
+  // inserted while coasting (last_inliers_=0 gates it), so a dead-reckoned pose
+  // never poisons the map. See docs/bench.
+  if (!ok && state_ == State::kTracking && coastFrames_ < holdMaxFrames && (motionValid_ || haveGyro_)) {
+    ++coastFrames_;
+    Matrix3d pR; Vector3d pt;
+    predictPose(pR, pt);
+    acceptPose(pR, pt, /*fromMotion=*/motionValid_);  // advance pose, keep velocity + trajectory
+    last_inliers_ = 0;                                 // low confidence -> blocks KF insertion
+    haveGyro_ = false;
+    xfValid_ = false;
+    refreshAnchor();
+    return true;  // soft-tracked via coast; state stays kTracking
+  }
+  if (!ok && state_ == State::kTracking) state_ = State::kLost;  // hold expired -> truly lost
+
   // While lost: geometry-seeded reloc from keyframe poses, every frame (cheap,
   // and it's what recovers on repetitive scenes where appearance matching
   // can't — see docs/bench). Runs before the expensive appearance fallback.
@@ -143,6 +166,7 @@ bool SlamMap::process(const OrbFeatures& f) {
     return false;
   }
   state_ = State::kTracking;
+  coastFrames_ = 0;  // recovered (projection or reloc) — reset the coast window
 
   // --- Motion-gated keyframe insertion. ---
   ++framesSinceKf_;

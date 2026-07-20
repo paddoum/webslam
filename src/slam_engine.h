@@ -68,6 +68,11 @@ class SlamEngine {
   // shipping a bigger default. Clamped to >= 500.
   void setMaxMapPoints(int n);
 
+  // Coast-through hold window (frames) for brief tracking dropouts (see
+  // SlamMap::holdMaxFrames). Runtime-tunable for A/B (?hold= URL param); 0 =
+  // pre-M15 drop-to-lost behavior. Clamped to [0, 120].
+  void setHoldFrames(int n);
+
   // AR anchor: attach a world point to nearby map geometry so it rides BA /
   // VI / scale corrections instead of drifting (see SlamMap::setAnchor).
   void setAnchor(double x, double y, double z);
@@ -158,6 +163,8 @@ class SlamEngine {
   int max_height_;
   int max_features_;
   int max_map_points_override_ = 0;  // 0 = use map.h default; re-applied on enableMapping()
+  int hold_frames_override_ = 0;     // coast-through hold; applied only if hold_frames_set_
+  bool hold_frames_set_ = false;
 
   static constexpr int kMaxXFeat = 512;   // capacity of the XFeat staging buffers
   std::vector<std::uint8_t> input_rgba_;  // staged frame (RGBA)

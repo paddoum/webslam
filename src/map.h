@@ -144,6 +144,11 @@ class SlamMap {
   // floor. Far cheaper than global reloc (~3-8 ms/seed vs ~100 ms).
   int relocSeedsPerFrame = 3;        // KF pose hypotheses tried per lost frame
   double relocSeedSearchPx = 70;     // match window around projections from a seed pose
+  // Coast-through hold: on a brief projection dropout (fast rotation / blur),
+  // dead-reckon the pose on the motion model for this many frames and keep
+  // retrying projection before declaring lost + relocalizing. 0 disables (drop
+  // to lost immediately, the pre-M15 behavior). ~0.6 s at 33 fps.
+  int holdMaxFrames = 20;
   // XFeat (learned-feature) relocalization channel. Off unless the JS side
   // stages per-frame XFeat features (setFrameXFeat) — inert otherwise, so the
   // default build behaves exactly as before. Matches the lost frame's XFeat
@@ -222,6 +227,7 @@ class SlamMap {
   int frameCounter_ = 0;                // monotonic frame index (for lastSeen)
   int framesSinceReloc_ = 0;            // lost-frames since the last global-reloc attempt
   int relocSeedCursor_ = 0;             // round-robin position in the ranked KF seed list
+  int coastFrames_ = 0;                 // consecutive coast (dead-reckon) frames in the hold window
   // Staged XFeat features for the current frame (one-shot, set by setFrameXFeat).
   std::vector<Eigen::Vector2f> xfKp_;   // keypoint pixels
   std::vector<XDescriptor> xfDesc_;     // parallel 64-D descriptors

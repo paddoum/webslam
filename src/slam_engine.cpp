@@ -198,11 +198,18 @@ void SlamEngine::enableMapping() {
   // Re-apply the budget override — enableMapping() recreates the map (replay
   // calls it to reset), which would otherwise silently revert to the default.
   if (max_map_points_override_ > 0) map_->maxMapPoints = max_map_points_override_;
+  if (hold_frames_set_) map_->holdMaxFrames = hold_frames_override_;
 }
 
 void SlamEngine::setMaxMapPoints(int n) {
   max_map_points_override_ = std::max(500, n);
   if (map_) map_->maxMapPoints = max_map_points_override_;
+}
+
+void SlamEngine::setHoldFrames(int n) {
+  hold_frames_override_ = std::max(0, std::min(120, n));
+  hold_frames_set_ = true;
+  if (map_) map_->holdMaxFrames = hold_frames_override_;
 }
 
 void SlamEngine::setAnchor(double x, double y, double z) {

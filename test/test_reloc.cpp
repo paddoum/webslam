@@ -1,6 +1,8 @@
-// Verifies relocalization: build a map, force tracking loss by feeding blank
-// frames, then resume real frames and confirm the system RECOVERS (returns to
-// tracking) without resetting the map — i.e. keyframes/points are retained.
+// Verifies relocalization: build a map, force tracking loss by feeding a run of
+// blank frames LONGER than the coast-through hold window (so the hold expires
+// and a genuine loss occurs), then resume real frames and confirm the system
+// RECOVERS (returns to tracking) without resetting the map — i.e.
+// keyframes/points are retained.
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -13,7 +15,7 @@ using Eigen::Vector3d;
 
 int main() {
   Intrinsics K{420, 420, 160, 120};
-  const int W = 320, H = 240, frames = 50;
+  const int W = 320, H = 240, frames = 80;
 
   struct WP { Vector3d X; Descriptor d; };
   std::vector<WP> world;
@@ -25,7 +27,7 @@ int main() {
     world.push_back(w);
   }
   auto gtPose = [&](int f) {
-    const double u = f / 49.0;
+    const double u = f / (double)(frames - 1);
     const double yaw = 0.5 * std::sin(u * 3.14159);
     Matrix3d Rwc; Rwc << std::cos(yaw), 0, std::sin(yaw), 0, 1, 0, -std::sin(yaw), 0, std::cos(yaw);
     Vector3d C(2.5 * u, 0.3 * std::sin(u * 6.28), 1.5 * u);
@@ -49,7 +51,7 @@ int main() {
   SlamMap slam(K);
   bool everLost = false, recovered = false;
   int kfBeforeGap = 0, ptsBeforeGap = 0;
-  const int gapStart = 25, gapLen = 4;  // blank frames -> forced loss
+  const int gapStart = 30, gapLen = 26;  // blank frames > holdMaxFrames -> forced loss
 
   for (int f = 0; f < frames; ++f) {
     OrbFeatures ft;
