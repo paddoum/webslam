@@ -29,6 +29,14 @@ val depthView(SlamEngine& e) {
   return val(typed_memory_view(e.depthSize(), e.depthData()));
 }
 
+val xfeatKpView(SlamEngine& e) {
+  return val(typed_memory_view(e.xfeatKpSize(), e.xfeatKpData()));
+}
+
+val xfeatDescView(SlamEngine& e) {
+  return val(typed_memory_view(e.xfeatDescSize(), e.xfeatDescData()));
+}
+
 val matchLinesView(const SlamEngine& e) {
   const auto& v = e.matchLinesFlat();
   return val(typed_memory_view(v.size(), v.data()));
@@ -95,6 +103,9 @@ EMSCRIPTEN_BINDINGS(webslam_module) {
       .function("anchorZ", &SlamEngine::anchorZ)
       .function("depthView", &depthView)
       .function("densifyFromDepth", &SlamEngine::densifyFromDepth)
+      .function("xfeatKpView", &xfeatKpView)
+      .function("xfeatDescView", &xfeatDescView)
+      .function("setXFeat", &SlamEngine::setXFeat)
       .function("setMotionHint", &SlamEngine::setMotionHint)
       .function("setGyroDelta", &SlamEngine::setGyroDelta)
       .function("mapState", &SlamEngine::mapState)

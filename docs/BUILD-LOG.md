@@ -1035,3 +1035,26 @@ lost frame through the shared `trackFromPose`; appearance reloc stays as the
 throttled fallback). Results: reloc clip now recovers repeatedly and ends
 tracking (301 inliers); pan 82→13 lost; orbit unchanged (0); sphere 27→25.
 All native suites pass.
+
+---
+
+## XFeat reloc channel — built, measured, shelved off-by-default (2026-07-16)
+
+Prompted by the "hard time relocating" clip + the SuperMap/LingBot-Map
+discussion: learned features should beat ORB on repetitive texture. Built the
+whole channel behind `?xfeat=1` (docs/bench/xfeat-reloc.md).
+
+Phase 0 spike passed decisively: XFeat backbone -> ONNX 320x256, 1.5M params,
+2.7 MB, parity 1.00000, ~64 ms in-browser; 2-3x more inliers than ORB at
+moderate baseline (mixed at the extremes). Phase 1 built worker + engine
+(MapPoint.xdesc, setFrameXFeat staging, tagKeyframeXFeat, relocalizeByXFeat,
+process() wiring) + main.js gating + a deterministic bench-sync path.
+
+Phase 2 A/B (XFeat attempted every lost frame — generous upper bound): reloc
+841->835, sphere 25->25, pan 13->13, orbit 0->0. **No measurable benefit.**
+Reason: the seeded-KF reloc shipped last round already recovers the overlap
+cases (runs first), and the remaining losses are a COVERAGE problem (lost frames
+view unmapped scenery) that no relocalizer can solve. Per the plan's
+ship-or-shelve rule: **shelved.** Kept behind `?xfeat=1`, off by default, inert,
+zero regression (orbit 0 lost, 16/16 native suites pass). Real lever for these
+clips is map coverage, not descriptors.

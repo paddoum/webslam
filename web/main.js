@@ -42,6 +42,12 @@ let depthInferMs = 0;          // latest model inference latency (reported by wo
 let depthSendPose = null;      // pose snapshot at the instant a frame is sent to the worker
 let depthAlign = null;         // {a,b,n,r}: invDepth ≈ a·(net/255) + b  (M9.2)
 let lastDensified = 0;         // points added by the last depth densification (M9.3)
+// XFeat learned-feature relocalization channel (?xfeat=1). Runs in its own
+// worker; used to tag keyframes and to relocalize while lost. Off by default.
+const XFEAT_ON = new URLSearchParams(location.search).get('xfeat') === '1';
+let featWorker = null, featReady = false, featBusy = false;
+let lastFeatSent = 0, latestFeat = null, featInferMs = 0, featResolve = null;
+const FEAT_INTERVAL_MS = 150;  // send cadence while tracking (~keyframe rate); unthrottled while lost
 let fastThresh = 16;           // adaptive FAST threshold (auto-tuned to the feature target)
 let gyroMag = 0;               // latest gyro angular speed (rad/s) for fast-motion search widening
 let gyroVec = [0, 0, 0];       // latest gyro angular velocity vector (rad/s, device frame)
@@ -258,6 +264,7 @@ async function main() {
   const mapPts = parseInt(new URLSearchParams(location.search).get('mapPts') || '0', 10);
   if (mapPts > 0) engine.setMaxMapPoints(mapPts);
   engine.enableMapping();   // M3
+  if (XFEAT_ON) ensureFeatWorker();  // learned-feature reloc channel
   startMs = performance.now();
   el('status').textContent = 'WASM ready · synthetic scene (scale self-test running). Use camera + enable motion on a phone.';
   overlay.width = PROC_W; overlay.height = PROC_H;
@@ -306,6 +313,41 @@ function ensureDepthWorker() {
         el('status').textContent = 'depth model still loading — slow network or blocked. Try reload / Wi-Fi.';
     }, 60000);
   } catch (e) { el('status').textContent = 'depth unavailable: ' + e.message; depthOn = false; }
+}
+
+// XFeat worker (?xfeat=1): learned features for keyframe tagging + lost-frame
+// relocalization. Mirrors ensureDepthWorker. The result is staged into the
+// engine at the top of the next step() (before processFrame).
+function ensureFeatWorker() {
+  if (featWorker || !XFEAT_ON) return;
+  try {
+    featWorker = new Worker('./feat-worker.js', { type: 'module' });
+    featWorker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'ready') { featReady = true; }
+      else if (m.type === 'feat') {
+        latestFeat = { n: m.n, kp: new Float32Array(m.kp), desc: new Float32Array(m.desc) };
+        featInferMs = m.inferMs || 0; featBusy = false;
+        if (featResolve) { const r = featResolve; featResolve = null; r(); }  // bench-sync path
+      } else if (m.type === 'error') { console.warn('xfeat:', m.message); featReady = false; }
+    };
+    featWorker.onerror = () => { console.warn('xfeat worker error'); };
+  } catch (e) { console.warn('xfeat unavailable:', e.message); }
+}
+
+// Bench only: compute XFeat for the current proc frame SYNCHRONOUSLY (await the
+// worker) so the async model participates deterministically in the unpaced
+// replay — otherwise the replay races thousands of frames ahead of the ~64ms
+// worker and XFeat never applies. On-device (real-time) the async in-step send
+// is used instead; there the worker keeps up at ~half the frame rate.
+function benchXFeatSync() {
+  return new Promise((resolve) => {
+    if (!featWorker || !featReady) { resolve(); return; }
+    const fi = pctx.getImageData(0, 0, PROC_W, PROC_H);
+    featResolve = resolve;
+    featBusy = true;
+    featWorker.postMessage({ type: 'frame', data: fi.data.buffer, width: PROC_W, height: PROC_H }, [fi.data.buffer]);
+  });
 }
 
 // Map a normalized value [0,1] to a simple blue→cyan→yellow→red heatmap.
@@ -516,7 +558,26 @@ function step() {
     const wcam = m3v(Rci, gyroVec);  // camera-frame angular velocity (rad/s)
     engine.setGyroDelta(wcam[0], wcam[1], wcam[2], dt);
   }
+  // XFeat: stage the latest worker result for THIS processFrame (the engine
+  // consumes it once — to tag a keyframe if one is inserted, and to relocalize
+  // if lost — then clears it).
+  if (XFEAT_ON && latestFeat && latestFeat.n > 0) {
+    engine.xfeatKpView().set(latestFeat.kp.subarray(0, latestFeat.n * 2));
+    engine.xfeatDescView().set(latestFeat.desc.subarray(0, latestFeat.n * 64));
+    engine.setXFeat(latestFeat.n);
+    latestFeat = null;
+  }
   const n = engine.processFrame(PROC_W, PROC_H, fastThresh);
+  // XFeat send: while lost, as fast as the worker allows (recovery matters most);
+  // while tracking, at ~keyframe cadence (to tag keyframes). Single-inflight.
+  if (XFEAT_ON && featReady && !featBusy && featWorker && !(BENCH && replayActive)) {
+    const lost = engine.mapState() === 2;
+    if (lost || (performance.now() - lastFeatSent) > FEAT_INTERVAL_MS) {
+      const fi = pctx.getImageData(0, 0, PROC_W, PROC_H);
+      featWorker.postMessage({ type: 'frame', data: fi.data.buffer, width: PROC_W, height: PROC_H }, [fi.data.buffer]);
+      featBusy = true; lastFeatSent = performance.now();
+    }
+  }
   // Adaptive detection: drive the FAST threshold toward the feature-count target
   // so low-texture scenes (e.g. a wood floor) still yield enough corners to track.
   const target = parseInt(threshEl.value, 10);
@@ -1042,6 +1103,9 @@ async function loadAndReplay(file) {
       replayFrameDt = lastFrameEvTMs > 0 ? (ev.tMs - lastFrameEvTMs) / 1000 : 0.033;
       lastFrameEvTMs = ev.tMs;
       pctx.drawImage(ev.bitmap, 0, 0);
+      // Bench: compute XFeat synchronously so it participates deterministically
+      // (see benchXFeatSync). step() then stages latestFeat into the engine.
+      if (XFEAT_ON && BENCH && featReady) await benchXFeatSync();
       step();
       // In unpaced bench mode the loop would otherwise be one long macrotask,
       // starving worker messages (the depth results). Yield via MessageChannel
@@ -1107,6 +1171,8 @@ window.__replayUrl = async (url) => {
   return benchRows.length;
 };
 window.__anchor = () => anchorWorld;  // debug: read the anchored world point
+window.__feat = () => ({ on: XFEAT_ON, ready: featReady, busy: featBusy, inferMs: featInferMs,
+  n: latestFeat ? latestFeat.n : 0 });  // debug: XFeat worker state
 window.__mapStats = () => engine ? { spread: engine.mapSpread(), pts: engine.mapNumPoints(),
   anchorValid: engine.anchorValid(), ax: engine.anchorX(), ay: engine.anchorY(), az: engine.anchorZ() } : null;
 window.__place = (px = PROC_W / 2, py = PROC_H / 2) => { scanReady = true; placeAnchor(px, py); return anchorWorld; };

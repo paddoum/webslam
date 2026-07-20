@@ -116,6 +116,10 @@ bool SlamMap::process(const OrbFeatures& f) {
   // and it's what recovers on repetitive scenes where appearance matching
   // can't — see docs/bench). Runs before the expensive appearance fallback.
   if (!ok && state_ == State::kLost) ok = relocalizeByKeyframes(f);
+  // Learned-feature (XFeat) reloc: appearance match that stays distinctive on
+  // repetitive texture, pose-free — recovers wide-baseline cases projection
+  // seeding can't. Only when the JS worker staged features this frame.
+  if (!ok && state_ == State::kLost && xfValid_) ok = relocalizeByXFeat();
   if (!ok) {
     // Budgeted global reloc (see relocCooldownFrames in map.h): immediate on the
     // first lost frame, throttled afterwards so lost frames stay cheap and the
@@ -144,10 +148,97 @@ bool SlamMap::process(const OrbFeatures& f) {
   ++framesSinceKf_;
   if (shouldInsertKeyframe()) {
     insertKeyframe(f, lastMapMatches_);
+    if (xfValid_) tagKeyframeXFeat(keyframes_.back());  // learned descs for this KF's points
     framesSinceKf_ = 0;
   }
   haveGyro_ = false;  // consume the prior; main thread sets a fresh one each frame
+  xfValid_ = false;   // XFeat features are one-shot per frame
   refreshAnchor();    // ride BA / VI / scale corrections applied this frame
+  return true;
+}
+
+// Stage the current frame's XFeat features for the next process() (one-shot).
+void SlamMap::setFrameXFeat(const float* kpxy, const float* desc, int n) {
+  xfKp_.resize(n);
+  xfDesc_.resize(n);
+  for (int i = 0; i < n; ++i) {
+    xfKp_[i] = Eigen::Vector2f(kpxy[2 * i], kpxy[2 * i + 1]);
+    std::copy(desc + 64 * i, desc + 64 * (i + 1), xfDesc_[i].begin());
+  }
+  xfValid_ = n > 0;
+}
+
+// KF-tag: for each map point this keyframe observes, copy the descriptor of the
+// nearest staged XFeat keypoint (within xfeatTagRadiusPx of where the point was
+// seen) onto the map point. Gives map points learned descriptors using their
+// existing ORB-triangulated 3D — no parallel detector map. The staged features
+// are from a frame ~1-2 behind (XFeat is async), hence the few-px radius.
+void SlamMap::tagKeyframeXFeat(const Keyframe& kf) {
+  const double r2 = xfeatTagRadiusPx * xfeatTagRadiusPx;
+  for (int i = 0; i < (int)kf.feat.size(); ++i) {
+    const int pid = kf.ptIndex[i];
+    if (pid < 0) continue;
+    const float fx = kf.feat.x[i], fy = kf.feat.y[i];
+    int bestJ = -1; double bestD2 = r2;
+    for (int j = 0; j < (int)xfKp_.size(); ++j) {
+      const double dx = xfKp_[j].x() - fx, dy = xfKp_[j].y() - fy;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; bestJ = j; }
+    }
+    if (bestJ >= 0) { points_[pid].xdesc = xfDesc_[bestJ]; points_[pid].hasX = true; }
+  }
+}
+
+// Learned-feature relocalization: match the staged (lost-frame) XFeat
+// descriptors against all tagged map-point xdesc by squared-L2 with
+// mutual-nearest + Lowe ratio, then PnP with no prior. Mirrors
+// relocalizeGlobal's structure but with distinctive learned descriptors.
+bool SlamMap::relocalizeByXFeat() {
+  const int nq = (int)xfDesc_.size();
+  if (nq < relocMinInliers) return false;
+
+  // Gather tagged map points.
+  std::vector<int> tag;
+  tag.reserve(points_.size());
+  for (int i = 0; i < (int)points_.size(); ++i) if (points_[i].hasX) tag.push_back(i);
+  if ((int)tag.size() < relocMinInliers) return false;
+
+  // For each query descriptor, find its two nearest tagged map points (ratio
+  // test) and the map point's nearest query (mutual check).
+  const int nt = (int)tag.size();
+  std::vector<int> mapBestQ(nt, -1);
+  std::vector<double> mapBestD(nt, 1e18);
+  // First pass: best query per map point (for mutual check).
+  for (int q = 0; q < nq; ++q) {
+    for (int t = 0; t < nt; ++t) {
+      const double d = xfeatDist2(xfDesc_[q], points_[tag[t]].xdesc);
+      if (d < mapBestD[t]) { mapBestD[t] = d; mapBestQ[t] = q; }
+    }
+  }
+  // Second pass: per query, best + second-best map point; keep mutual + ratio.
+  std::vector<Eigen::Vector3d> wp;
+  std::vector<Eigen::Vector2d> uv;
+  for (int q = 0; q < nq; ++q) {
+    int best = -1; double b1 = 1e18, b2 = 1e18;
+    for (int t = 0; t < nt; ++t) {
+      const double d = xfeatDist2(xfDesc_[q], points_[tag[t]].xdesc);
+      if (d < b1) { b2 = b1; b1 = d; best = t; }
+      else if (d < b2) { b2 = d; }
+    }
+    if (best < 0 || b1 > xfeatMaxDist2) continue;
+    if (b1 > xfeatRatio * xfeatRatio * b2) continue;   // ratio on squared-L2
+    if (mapBestQ[best] != q) continue;                 // mutual nearest
+    wp.push_back(points_[tag[best]].X);
+    uv.push_back(Eigen::Vector2d(xfKp_[q].x(), xfKp_[q].y()));
+  }
+  if ((int)wp.size() < relocMinInliers) return false;
+
+  PnPResult r = solvePnP(wp, uv, K_, /*pixelThreshold=*/3.0, /*iters=*/300, /*seed=*/9973,
+                         /*hasGuess=*/false);
+  if (!r.ok || r.inliers < relocMinInliers) return false;
+
+  acceptPose(r.R, r.t, /*fromMotion=*/false);
+  last_inliers_ = r.inliers;
   return true;
 }
 

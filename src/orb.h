@@ -10,6 +10,18 @@ namespace webslam {
 // 256-bit ORB descriptor packed into 8 x 32-bit words.
 using Descriptor = std::array<std::uint32_t, 8>;
 
+// 64-D float XFeat (learned) descriptor, L2-normalized. Used only by the
+// optional XFeat relocalization channel (see SlamMap::relocalizeByXFeat).
+using XDescriptor = std::array<float, 64>;
+
+// Squared L2 distance between two XFeat descriptors. Both are unit-norm, so
+// this equals 2 - 2*cosine; smaller = more similar. Used for mutual-NN + ratio.
+inline float xfeatDist2(const XDescriptor& a, const XDescriptor& b) {
+  float s = 0;
+  for (int i = 0; i < 64; ++i) { const float d = a[i] - b[i]; s += d * d; }
+  return s;
+}
+
 // A set of keypoints that survived descriptor extraction, with their
 // orientation and binary descriptor.
 struct OrbFeatures {

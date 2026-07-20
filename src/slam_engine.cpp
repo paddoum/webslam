@@ -129,6 +129,8 @@ SlamEngine::SlamEngine(int maxWidth, int maxHeight, int maxFeatures)
   input_rgba_.assign(static_cast<size_t>(maxWidth) * maxHeight * 4, 0);
   gray_.assign(static_cast<size_t>(maxWidth) * maxHeight, 0);
   depth_buf_.assign(static_cast<size_t>(maxWidth) * maxHeight, 0);
+  xfeat_kp_.assign(static_cast<size_t>(kMaxXFeat) * 2, 0.0f);
+  xfeat_desc_.assign(static_cast<size_t>(kMaxXFeat) * 64, 0.0f);
   keypoints_.reserve(maxFeatures);
   keypoints_flat_.reserve(maxFeatures * 3);
   scale_ = std::make_unique<MetricScaleEstimator>();
@@ -210,6 +212,13 @@ bool SlamEngine::anchorValid() const { return map_ && map_->anchorValid(); }
 double SlamEngine::anchorX() const { return map_ ? map_->anchorWorld().x() : 0; }
 double SlamEngine::anchorY() const { return map_ ? map_->anchorWorld().y() : 0; }
 double SlamEngine::anchorZ() const { return map_ ? map_->anchorWorld().z() : 0; }
+
+void SlamEngine::setXFeat(int n) {
+  if (!map_) return;
+  if (n < 0) n = 0;
+  if (n > kMaxXFeat) n = kMaxXFeat;
+  map_->setFrameXFeat(xfeat_kp_.data(), xfeat_desc_.data(), n);
+}
 
 void SlamEngine::setMotionHint(double px) { if (map_) map_->setSearchHint(px); }
 

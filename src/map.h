@@ -21,6 +21,11 @@ struct MapPoint {
   // !solid — the sliding-window cull ages them faster so they can't evict
   // well-triangulated geometry when the map is at capacity.
   bool solid = true;
+  // Optional learned (XFeat) descriptor, tagged at keyframe insert when a
+  // nearby XFeat keypoint exists. Enables the appearance-robust XFeat
+  // relocalization channel; hasX=false points just don't participate in it.
+  XDescriptor xdesc{};
+  bool hasX = false;
 };
 
 // A keyframe: a pose plus the features observed there and their map-point links.
@@ -139,6 +144,15 @@ class SlamMap {
   // floor. Far cheaper than global reloc (~3-8 ms/seed vs ~100 ms).
   int relocSeedsPerFrame = 3;        // KF pose hypotheses tried per lost frame
   double relocSeedSearchPx = 70;     // match window around projections from a seed pose
+  // XFeat (learned-feature) relocalization channel. Off unless the JS side
+  // stages per-frame XFeat features (setFrameXFeat) — inert otherwise, so the
+  // default build behaves exactly as before. Matches the lost frame's XFeat
+  // descriptors against tagged map-point xdesc (L2, mutual-NN + ratio), then
+  // PnP. Learned features stay distinctive on repetitive texture where ORB
+  // Hamming matching drowns.
+  double xfeatMaxDist2 = 0.6;        // max squared-L2 for a candidate match (2 = orthogonal)
+  float  xfeatRatio = 0.9f;          // Lowe ratio on squared-L2 (best < ratio*second)
+  double xfeatTagRadiusPx = 4.0;     // KF-tag: map-point pixel -> nearest XFeat kp within this
   // Track-by-projection (robust to viewpoint change while tracking).
   double trackSearchRadiusPx = 36;   // base search window around a predicted projection
   double trackMaxSearchPx = 150;     // adaptive cap for fast motion
@@ -148,6 +162,12 @@ class SlamMap {
   // Per-frame hint (px) of expected feature motion — e.g. from the gyro — used
   // to widen the search window the instant the camera moves fast.
   void setSearchHint(double px) { searchHint_ = px; }
+
+  // Stage the current frame's XFeat features (from the JS worker) for the NEXT
+  // process() call: consumed once (to tag a keyframe if one is inserted, and to
+  // drive relocalizeByXFeat while lost), then cleared. kpxy = 2*n floats (x,y in
+  // processing pixels), desc = 64*n floats (L2-normalized). Inert if never called.
+  void setFrameXFeat(const float* kpxy, const float* desc, int n);
 
   // Per-frame gyro rotation prior: the camera-frame angular velocity (rad/s,
   // already rotated by the calibrated device->camera extrinsic) and the time
@@ -168,6 +188,8 @@ class SlamMap {
                      const Eigen::Vector3d& t0, double radius, int minInliers,
                      bool fromMotion);
   bool relocalizeByKeyframes(const OrbFeatures& f); // geometry-seeded (see relocSeedsPerFrame)
+  bool relocalizeByXFeat();                        // learned-feature match -> PnP (see setFrameXFeat)
+  void tagKeyframeXFeat(const Keyframe& kf);       // copy nearby XFeat descs onto the KF's map points
   bool relocalizeGlobal(const OrbFeatures& f);    // global descriptor match, no prior
   void predictPose(Eigen::Matrix3d& R, Eigen::Vector3d& t) const;
   void acceptPose(const Eigen::Matrix3d& R, const Eigen::Vector3d& t, bool fromMotion);
@@ -200,6 +222,10 @@ class SlamMap {
   int frameCounter_ = 0;                // monotonic frame index (for lastSeen)
   int framesSinceReloc_ = 0;            // lost-frames since the last global-reloc attempt
   int relocSeedCursor_ = 0;             // round-robin position in the ranked KF seed list
+  // Staged XFeat features for the current frame (one-shot, set by setFrameXFeat).
+  std::vector<Eigen::Vector2f> xfKp_;   // keypoint pixels
+  std::vector<XDescriptor> xfDesc_;     // parallel 64-D descriptors
+  bool xfValid_ = false;                // staged features available for this process()
 
   // AR anchor state (see setAnchor).
   void refreshAnchor();                 // re-derive anchor from its points' current positions

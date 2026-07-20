@@ -42,6 +42,16 @@ class SlamEngine {
   // Densify the map from the staged depth (dw x dh), with the alignment (a,b).
   int densifyFromDepth(int dw, int dh, double a, double b);
 
+  // XFeat staging: the page writes this frame's learned features here (keypoint
+  // xy pairs + 64-D descriptors) then calls setXFeat(n) BEFORE processFrame.
+  // Consumed once by the map (KF tagging + lost-frame reloc). Capacity =
+  // kMaxXFeat features. Inert unless the page uses it (?xfeat=1).
+  float* xfeatKpData() { return xfeat_kp_.data(); }
+  std::size_t xfeatKpSize() const { return xfeat_kp_.size(); }
+  float* xfeatDescData() { return xfeat_desc_.data(); }
+  std::size_t xfeatDescSize() const { return xfeat_desc_.size(); }
+  void setXFeat(int n);
+
   // Hint (px) of expected feature motion this frame (e.g. gyro-derived) so the
   // tracker widens its search window for fast motion. Call before processFrame.
   void setMotionHint(double px);
@@ -149,9 +159,12 @@ class SlamEngine {
   int max_features_;
   int max_map_points_override_ = 0;  // 0 = use map.h default; re-applied on enableMapping()
 
+  static constexpr int kMaxXFeat = 512;   // capacity of the XFeat staging buffers
   std::vector<std::uint8_t> input_rgba_;  // staged frame (RGBA)
   std::vector<std::uint8_t> gray_;        // grayscale working buffer
   std::vector<std::uint8_t> depth_buf_;   // staged aligned depth map (M9.3)
+  std::vector<float> xfeat_kp_;           // staged XFeat keypoints (2*kMaxXFeat)
+  std::vector<float> xfeat_desc_;         // staged XFeat descriptors (64*kMaxXFeat)
   int last_w_ = 0, last_h_ = 0;           // last processed frame dims
   std::vector<Keypoint> keypoints_;
   std::vector<float> keypoints_flat_;     // exposed to JS
