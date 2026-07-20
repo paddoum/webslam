@@ -701,6 +701,14 @@ void SlamMap::insertKeyframe(const OrbFeatures& f, const std::vector<DMatch>& ma
 // the total stays bounded — old, no-longer-seen regions fall out of the map.
 // Solid (well-triangulated) points get a recency bonus so a flood of
 // provisional low-parallax scaffold points from a pan can't evict them.
+//
+// NOTE: a coverage-aware variant (retain a spatially-diverse skeleton of every
+// visited region so there's something to relocalize against on return) was
+// tried and REVERTED — it showed no benefit on the recorded clips (their losses
+// are looking at NEVER-mapped space, not returning to culled regions) and
+// destabilized exploration tracking in a synthetic test (stale old-viewpoint
+// points poison projection matching — the same effect the map-budget sweep
+// found). Recency doubles as a relevance filter; keep it. See docs/bench.
 void SlamMap::cullMapPoints() {
   const int n = (int)points_.size();
   if (n <= maxMapPoints) return;
